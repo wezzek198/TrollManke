@@ -7,7 +7,7 @@ import sys
 
 # ===== КОНФИГУРАЦИЯ =====
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")  # ЗАМЕНИТЕ НА ВАШ ТОКЕН!
-YOUR_USER_ID = 1307172745  # ЗАМЕНИТЕ НА ВАШ ID!
+YOUR_USER_ID = 7384715060 # ЗАМЕНИТЕ НА ВАШ ID!
 DB_NAME = "chat_bot.db"
 
 # Настройка логирования
@@ -370,4 +370,5 @@ def main():
         input("Нажмите Enter для выхода...")
 
 if __name__ == "__main__":
+
     main()
