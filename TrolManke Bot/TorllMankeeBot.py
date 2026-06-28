@@ -1,10 +1,13 @@
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
+from telegram.request import HTTPXRequest
 import sqlite3
 import os
 import sys
 from datetime import datetime, timedelta
+import asyncio
+from typing import List, Tuple
 
 # ===== КОНФИГУРАЦИЯ =====
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -26,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 # Глобальные переменные
 user_states = {}  # {user_id: {'action': 'send_to', 'chat_id': int}}
+tracked_chats = []  # Список отслеживаемых чатов
 
 
 # ===== БАЗА ДАННЫХ =====
@@ -302,6 +306,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "list_chats":
         await show_chats(query, user_id, 0)
     
+    # Отслеживание чата
+    elif data == "track_chat":
+        await show_chats_for_tracking(query, user_id)
+    
     # Пагинация
     elif data.startswith("page_"):
         page = int(data.split("_")[1])
@@ -328,7 +336,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "refresh_chats":
         await query.edit_message_text(
             "🔄 <b>Обновление чатов...</b>\n\n"
-            "Бот сканирует все чаты, где он находится.",
+            "Бот сканирует все чаты, где он находится.\n"
+            "Это может занять некоторое время...",
             parse_mode='HTML'
         )
         await refresh_all_chats(query, context)
@@ -353,10 +362,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("start_track_"):
         chat_id = int(data.split("_")[2])
         # Сохраняем состояние отслеживания
-        if not hasattr(context.bot_data, 'tracked_chats'):
-            context.bot_data['tracked_chats'] = []
-        if chat_id not in context.bot_data['tracked_chats']:
-            context.bot_data['tracked_chats'].append(chat_id)
+        global tracked_chats
+        if chat_id not in tracked_chats:
+            tracked_chats.append(chat_id)
         
         await query.edit_message_text(
             f"👁 <b>Отслеживание включено</b>\n\n"
@@ -374,8 +382,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Остановить отслеживание
     elif data.startswith("stop_track_"):
         chat_id = int(data.split("_")[2])
-        if 'tracked_chats' in context.bot_data and chat_id in context.bot_data['tracked_chats']:
-            context.bot_data['tracked_chats'].remove(chat_id)
+        global tracked_chats
+        if chat_id in tracked_chats:
+            tracked_chats.remove(chat_id)
         
         # Очищаем кэш
         clear_cache_for_chat(chat_id)
@@ -407,7 +416,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
-        text = f"📜 <b>История чата {chat_id}</b>\n\n"
+        text = f"📜 <b>История чата</b>\n\n"
         for user_id, username, first_name, msg_text, msg_type, timestamp in messages[:20]:
             user_info = f"@{username}" if username else first_name or f"ID:{user_id}"
             time = datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S').strftime('%H:%M')
@@ -473,6 +482,39 @@ async def show_chats(query, user_id, page):
         reply_markup=get_chats_keyboard(user_id, page)
     )
 
+async def show_chats_for_tracking(query, user_id):
+    """Показывает чаты для отслеживания"""
+    chats = get_user_chats(user_id)
+    
+    if not chats:
+        await query.edit_message_text(
+            "📭 <b>Нет сохраненных чатов</b>\n\n"
+            "Сначала добавьте бота в чат.",
+            parse_mode='HTML',
+            reply_markup=get_main_keyboard()
+        )
+        return
+    
+    keyboard = []
+    for chat_id, chat_title, chat_type in chats:
+        is_tracking = chat_id in tracked_chats
+        status = "🟢" if is_tracking else "⚪️"
+        keyboard.append([
+            InlineKeyboardButton(
+                f"{status} {chat_title[:30]}", 
+                callback_data=f"chat_{chat_id}"
+            )
+        ])
+    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="main_menu")])
+    
+    await query.edit_message_text(
+        "👁 <b>Выберите чат для управления отслеживанием</b>\n\n"
+        "🟢 - отслеживается\n"
+        "⚪️ - не отслеживается",
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
 async def show_chats_for_media(query, user_id, media_type):
     """Показывает чаты для отправки медиа"""
     chats = get_user_chats(user_id)
@@ -505,9 +547,7 @@ async def show_chats_for_media(query, user_id, media_type):
 
 async def show_chat_actions(query, user_id, chat_id):
     """Показывает действия для чата"""
-    is_tracking = False
-    if 'tracked_chats' in query.bot_data:
-        is_tracking = chat_id in query.bot_data['tracked_chats']
+    is_tracking = chat_id in tracked_chats
     
     # Получаем информацию о чате
     chats = get_user_chats(user_id)
@@ -712,10 +752,7 @@ async def track_chat_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     
     # Проверяем, отслеживается ли этот чат
-    if 'tracked_chats' not in context.bot_data:
-        return
-    
-    if chat_id not in context.bot_data['tracked_chats']:
+    if chat_id not in tracked_chats:
         return
     
     # Получаем информацию о пользователе
@@ -830,31 +867,53 @@ async def track_chat_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def refresh_all_chats(query, context):
-    """Обновляет список чатов"""
+    """Обновляет список чатов с ограничением скорости"""
     try:
-        # Получаем все обновления
+        # Получаем обновления с ограничением
         updates = await context.bot.get_updates(limit=100)
         added = 0
+        total_checked = 0
         
+        # Обрабатываем обновления с задержкой
         for update in updates:
             if update.message and update.message.chat:
                 chat = update.message.chat
                 if chat.type in ["group", "supergroup"]:
+                    total_checked += 1
                     if add_chat_to_db(YOUR_USER_ID, chat.id, chat.title, chat.type):
                         added += 1
+                    # Небольшая задержка между запросами
+                    await asyncio.sleep(0.1)
         
+        # Обновляем статус
         await query.edit_message_text(
             f"✅ <b>Чаты обновлены</b>\n\n"
-            f"Добавлено новых чатов: {added}\n"
-            f"Всего чатов: {len(get_user_chats(YOUR_USER_ID))}",
+            f"📊 Проверено чатов: {total_checked}\n"
+            f"📥 Добавлено новых: {added}\n"
+            f"📋 Всего чатов: {len(get_user_chats(YOUR_USER_ID))}\n\n"
+            f"<i>Обновление завершено!</i>",
             parse_mode='HTML',
             reply_markup=get_main_keyboard()
         )
-    except Exception as e:
-        await query.edit_message_text(
-            f"❌ Ошибка обновления: {e}",
-            reply_markup=get_main_keyboard()
+        
+        # Уведомление
+        await context.bot.send_message(
+            chat_id=YOUR_USER_ID,
+            text=f"🔄 Обновление чатов завершено!\n"
+                 f"Всего чатов: {len(get_user_chats(YOUR_USER_ID))}"
         )
+        
+    except Exception as e:
+        error_msg = f"❌ Ошибка обновления: {str(e)}"
+        logger.error(error_msg)
+        try:
+            await query.edit_message_text(
+                f"{error_msg}\n\n"
+                "Попробуйте еще раз через несколько секунд.",
+                reply_markup=get_main_keyboard()
+            )
+        except:
+            pass
 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -877,15 +936,28 @@ def main():
         # Очищаем старый кэш при запуске
         cleanup_old_cache()
         
-        application = Application.builder().token(TOKEN).build()
+        # Настройка HTTP клиента с большим пулом соединений
+        # Увеличиваем таймаут и размер пула
+        http_client = HTTPXRequest(
+            connection_pool_size=8,
+            pool_timeout=30.0,
+            read_timeout=30.0,
+            write_timeout=30.0,
+            connect_timeout=30.0
+        )
+        
+        application = Application.builder()\
+            .token(TOKEN)\
+            .http_client(http_client)\
+            .build()
         
         # Инициализация данных
-        application.bot_data['tracked_chats'] = []
+        application.bot_data['tracked_chats'] = tracked_chats
         
         # Обработчики команд
         application.add_handler(CommandHandler("start", start))
         
-        # Callback обработчики - ВАЖНО: сначала общий, потом специфичный
+        # Callback обработчики
         application.add_handler(CallbackQueryHandler(handle_media_selection, pattern="^media_chat_"))
         application.add_handler(CallbackQueryHandler(handle_callback))
         
@@ -895,7 +967,7 @@ def main():
             handle_messages
         ))
         
-        # Обработчик для медиа файлов (исправлено)
+        # Обработчик для медиа файлов
         application.add_handler(MessageHandler(
             filters.ChatType.PRIVATE & (filters.PHOTO | filters.VIDEO | filters.Document.ALL),
             handle_media_files
@@ -914,7 +986,7 @@ def main():
         print("❌ Чтобы остановить бота, нажмите Ctrl+C")
         print("=" * 50)
         
-        application.run_polling()
+        application.run_polling(drop_pending_updates=True)
         
     except Exception as e:
         logger.error(f"Критическая ошибка при запуске: {e}")
