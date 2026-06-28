@@ -23,9 +23,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Глобальные переменные
-user_states = {}  # {user_id: {'action': 'send_to', 'chat_id': int}}
-tracked_chats = []  # Список отслеживаемых чатов
-fixed_chat = None  # Закрепленный чат для быстрой отправки
+user_states = {}
+tracked_chats = []
+fixed_chat = None
 
 
 # ===== БАЗА ДАННЫХ =====
@@ -58,7 +58,7 @@ def add_chat_to_db(user_id, chat_id, chat_title, chat_type):
         )
         conn.commit()
         conn.close()
-        logger.info(f"Чат добавлен: {chat_title} ({chat_id})")
+        logger.info(f"✅ Чат добавлен в БД: {chat_title} ({chat_id})")
         return True
     except Exception as e:
         logger.error(f"Ошибка добавления чата: {e}")
@@ -74,6 +74,7 @@ def get_user_chats(user_id):
         )
         chats = cursor.fetchall()
         conn.close()
+        logger.info(f"Получено чатов из БД: {len(chats)}")
         return chats
     except Exception as e:
         logger.error(f"Ошибка получения чатов: {e}")
@@ -94,7 +95,6 @@ def remove_chat_from_db(user_id, chat_id):
 
 # ===== КЛАВИАТУРЫ =====
 def get_main_keyboard():
-    """Главное меню"""
     keyboard = [
         [InlineKeyboardButton("📋 Список чатов", callback_data="list_chats")],
         [InlineKeyboardButton("👁 Отслеживание", callback_data="tracking_menu")],
@@ -112,7 +112,6 @@ def get_main_keyboard():
     return InlineKeyboardMarkup(keyboard)
 
 def get_quick_send_keyboard():
-    """Клавиатура быстрой отправки"""
     keyboard = [
         [InlineKeyboardButton("📝 Текст", callback_data="quick_text")],
         [InlineKeyboardButton("📷 Фото", callback_data="quick_photo")],
@@ -123,7 +122,6 @@ def get_quick_send_keyboard():
     return InlineKeyboardMarkup(keyboard)
 
 def get_chats_keyboard(user_id, page=0, per_page=5):
-    """Клавиатура со списком чатов"""
     chats = get_user_chats(user_id)
     keyboard = []
     
@@ -153,25 +151,21 @@ def get_chats_keyboard(user_id, page=0, per_page=5):
     return InlineKeyboardMarkup(keyboard)
 
 def get_chat_actions_keyboard(chat_id):
-    """Клавиатура действий с чатом"""
     is_tracking = chat_id in tracked_chats
     is_fixed = chat_id == fixed_chat
     
     keyboard = []
     
-    # Отслеживание
     if is_tracking:
         keyboard.append([InlineKeyboardButton("🛑 Остановить отслеживание", callback_data=f"stop_track_{chat_id}")])
     else:
         keyboard.append([InlineKeyboardButton("👁 Начать отслеживание", callback_data=f"start_track_{chat_id}")])
     
-    # Закрепление для быстрой отправки
     if is_fixed:
         keyboard.append([InlineKeyboardButton("⭐ Открепить", callback_data=f"unfix_chat")])
     else:
         keyboard.append([InlineKeyboardButton("⭐ Закрепить для быстрой отправки", callback_data=f"fix_chat_{chat_id}")])
     
-    # Отправка
     keyboard.append([InlineKeyboardButton("📤 Отправить сообщение", callback_data=f"send_to_{chat_id}")])
     keyboard.append([InlineKeyboardButton("🗑 Удалить чат", callback_data=f"delete_{chat_id}")])
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="list_chats")])
@@ -179,7 +173,6 @@ def get_chat_actions_keyboard(chat_id):
     return InlineKeyboardMarkup(keyboard)
 
 def get_tracking_keyboard():
-    """Клавиатура меню отслеживания"""
     chats = get_user_chats(YOUR_USER_ID)
     keyboard = []
     
@@ -236,7 +229,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     data = query.data
     
-    # Главное меню
     if data == "main_menu":
         await query.edit_message_text(
             "👋 <b>Главное меню</b>\n\nВыберите действие:",
@@ -244,7 +236,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_main_keyboard()
         )
     
-    # Меню отслеживания
     elif data == "tracking_menu":
         await query.edit_message_text(
             "👁 <b>Управление отслеживанием</b>\n\n"
@@ -255,7 +246,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_tracking_keyboard()
         )
     
-    # Быстрая отправка
     elif data == "quick_send":
         if not fixed_chat:
             await query.edit_message_text(
@@ -279,7 +269,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_quick_send_keyboard()
         )
     
-    # Быстрая отправка текста
     elif data == "quick_text":
         user_states[user_id] = {'action': 'send_message', 'chat_id': fixed_chat}
         await query.edit_message_text(
@@ -288,7 +277,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='HTML'
         )
     
-    # Быстрая отправка медиа
     elif data in ["quick_photo", "quick_video", "quick_document"]:
         media_type = data.split("_")[1]
         user_states[user_id] = {
@@ -304,21 +292,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='HTML'
         )
     
-    # Список чатов
     elif data == "list_chats":
         await show_chats(query, user_id, 0)
     
-    # Пагинация
     elif data.startswith("page_"):
         page = int(data.split("_")[1])
         await show_chats(query, user_id, page)
     
-    # Действия с чатом
     elif data.startswith("chat_"):
         chat_id = int(data.split("_")[1])
         await show_chat_actions(query, user_id, chat_id)
     
-    # Закрепить чат
     elif data.startswith("fix_chat_"):
         chat_id = int(data.split("_")[2])
         fixed_chat = chat_id
@@ -330,7 +314,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_main_keyboard()
         )
     
-    # Открепить чат
     elif data == "unfix_chat":
         fixed_chat = None
         await query.edit_message_text(
@@ -339,7 +322,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_main_keyboard()
         )
     
-    # Начать отслеживание
     elif data.startswith("start_track_"):
         chat_id = int(data.split("_")[2])
         if chat_id not in tracked_chats:
@@ -353,7 +335,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await show_chat_actions(query, user_id, chat_id)
     
-    # Остановить отслеживание
     elif data.startswith("stop_track_"):
         chat_id = int(data.split("_")[2])
         if chat_id in tracked_chats:
@@ -367,7 +348,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await show_chat_actions(query, user_id, chat_id)
     
-    # Отправить сообщение
     elif data.startswith("send_to_"):
         chat_id = int(data.split("_")[2])
         user_states[user_id] = {'action': 'send_message', 'chat_id': chat_id}
@@ -377,7 +357,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='HTML'
         )
     
-    # Удалить чат
     elif data.startswith("delete_"):
         chat_id = int(data.split("_")[1])
         remove_chat_from_db(user_id, chat_id)
@@ -392,10 +371,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_main_keyboard()
         )
     
-    # Обновить чаты
     elif data == "refresh_chats":
         await query.edit_message_text(
-            "🔄 <b>Обновление чатов...</b>",
+            "🔄 <b>Обновление чатов...</b>\n\n"
+            "Бот сканирует все чаты...",
             parse_mode='HTML'
         )
         await refresh_all_chats(query, context)
@@ -467,12 +446,15 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
     chat_id = chat.id
     chat_type = chat.type
     
-    logger.info(f"Сообщение от {user_id} в {chat_id} ({chat_type})")
+    # Логируем ВСЕ сообщения для отладки
+    logger.info(f"📩 Сообщение от {user_id} в {chat_id} ({chat_type})")
     
     # ===== АВТОМАТИЧЕСКОЕ ДОБАВЛЕНИЕ ЧАТОВ =====
     if chat_type in ["group", "supergroup"]:
         chat_title = chat.title or "Без названия"
+        logger.info(f"📌 Групповой чат: {chat_title}")
         
+        # Добавляем чат для владельца (при ЛЮБОМ сообщении)
         if user_id == YOUR_USER_ID:
             if add_chat_to_db(YOUR_USER_ID, chat_id, chat_title, chat_type):
                 await context.bot.send_message(
@@ -484,84 +466,120 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
             # Уведомление о сообщении от другого пользователя
             user = update.effective_user
             try:
+                message_text = update.message.text if update.message.text else "Медиа"
                 await context.bot.send_message(
                     chat_id=YOUR_USER_ID,
                     text=f"📨 <b>Сообщение в чате</b>\n\n"
                          f"📌 {chat.title}\n"
                          f"👤 {user.first_name} (@{user.username or 'Нет'})\n"
-                         f"💬 {update.message.text[:100] if update.message.text else 'Медиа'}",
+                         f"💬 {message_text[:100]}",
                     parse_mode='HTML'
                 )
-            except:
-                pass
-            return
-    
-    # ===== ОТСЛЕЖИВАНИЕ ЧАТОВ =====
-    if chat_type in ["group", "supergroup"] and chat_id in tracked_chats:
-        user = update.effective_user
-        username = user.username or "Нет"
-        first_name = user.first_name or "Нет"
+            except Exception as e:
+                logger.error(f"Ошибка уведомления: {e}")
         
-        message_text = ""
-        if update.message.text:
-            message_text = update.message.text
-        elif update.message.photo:
-            message_text = "📷 Фото"
-        elif update.message.video:
-            message_text = "🎥 Видео"
-        elif update.message.document:
-            message_text = f"📄 {update.message.document.file_name or 'Документ'}"
-        elif update.message.audio:
-            message_text = "🎵 Аудио"
-        elif update.message.voice:
-            message_text = "🎤 Голосовое"
-        elif update.message.sticker:
-            message_text = "🎨 Стикер"
-        else:
-            message_text = "📎 Другое"
-        
-        time = datetime.now().strftime("%H:%M:%S")
-        user_info = f"@{username}" if username != "Нет" else first_name
-        
-        notification = (
-            f"📨 <b>Отслеживание</b>\n\n"
-            f"📌 {chat.title}\n"
-            f"👤 {user_info} (ID: {user_id})\n"
-            f"💬 {message_text}\n"
-            f"🕐 {time}"
-        )
-        
-        try:
-            # Пересылаем медиа если есть
-            if update.message.photo:
-                await context.bot.send_photo(
-                    chat_id=YOUR_USER_ID,
-                    photo=update.message.photo[-1].file_id,
-                    caption=notification[:1024],
-                    parse_mode='HTML'
-                )
+        # ===== ОТСЛЕЖИВАНИЕ =====
+        if chat_id in tracked_chats:
+            user = update.effective_user
+            username = user.username or "Нет"
+            first_name = user.first_name or "Нет"
+            
+            # Определяем тип сообщения
+            message_text = ""
+            file_id = None
+            file_type = None
+            
+            if update.message.text:
+                message_text = update.message.text
+            elif update.message.photo:
+                message_text = "📷 Фото"
+                file_id = update.message.photo[-1].file_id
+                file_type = "photo"
             elif update.message.video:
-                await context.bot.send_video(
-                    chat_id=YOUR_USER_ID,
-                    video=update.message.video.file_id,
-                    caption=notification[:1024],
-                    parse_mode='HTML'
-                )
+                message_text = "🎥 Видео"
+                file_id = update.message.video.file_id
+                file_type = "video"
             elif update.message.document:
-                await context.bot.send_document(
-                    chat_id=YOUR_USER_ID,
-                    document=update.message.document.file_id,
-                    caption=notification[:1024],
-                    parse_mode='HTML'
-                )
+                message_text = f"📄 {update.message.document.file_name or 'Документ'}"
+                file_id = update.message.document.file_id
+                file_type = "document"
+            elif update.message.audio:
+                message_text = "🎵 Аудио"
+                file_id = update.message.audio.file_id
+                file_type = "audio"
+            elif update.message.voice:
+                message_text = "🎤 Голосовое"
+                file_id = update.message.voice.file_id
+                file_type = "voice"
+            elif update.message.sticker:
+                message_text = "🎨 Стикер"
+                file_id = update.message.sticker.file_id
+                file_type = "sticker"
             else:
-                await context.bot.send_message(
-                    chat_id=YOUR_USER_ID,
-                    text=notification,
-                    parse_mode='HTML'
-                )
-        except Exception as e:
-            logger.error(f"Ошибка отправки уведомления: {e}")
+                message_text = "📎 Другое сообщение"
+            
+            time = datetime.now().strftime("%H:%M:%S")
+            user_info = f"@{username}" if username != "Нет" else first_name
+            
+            notification = (
+                f"📨 <b>Отслеживание</b>\n\n"
+                f"📌 {chat.title}\n"
+                f"👤 {user_info} (ID: {user_id})\n"
+                f"💬 {message_text}\n"
+                f"🕐 {time}"
+            )
+            
+            try:
+                # Отправляем медиа если есть
+                if file_type == "photo":
+                    await context.bot.send_photo(
+                        chat_id=YOUR_USER_ID,
+                        photo=file_id,
+                        caption=notification[:1024],
+                        parse_mode='HTML'
+                    )
+                elif file_type == "video":
+                    await context.bot.send_video(
+                        chat_id=YOUR_USER_ID,
+                        video=file_id,
+                        caption=notification[:1024],
+                        parse_mode='HTML'
+                    )
+                elif file_type == "document":
+                    await context.bot.send_document(
+                        chat_id=YOUR_USER_ID,
+                        document=file_id,
+                        caption=notification[:1024],
+                        parse_mode='HTML'
+                    )
+                elif file_type == "audio":
+                    await context.bot.send_audio(
+                        chat_id=YOUR_USER_ID,
+                        audio=file_id,
+                        caption=notification[:1024],
+                        parse_mode='HTML'
+                    )
+                elif file_type == "voice":
+                    await context.bot.send_voice(
+                        chat_id=YOUR_USER_ID,
+                        voice=file_id,
+                        caption=notification[:1024],
+                        parse_mode='HTML'
+                    )
+                elif file_type == "sticker":
+                    await context.bot.send_sticker(
+                        chat_id=YOUR_USER_ID,
+                        sticker=file_id
+                    )
+                else:
+                    await context.bot.send_message(
+                        chat_id=YOUR_USER_ID,
+                        text=notification,
+                        parse_mode='HTML'
+                    )
+                logger.info(f"✅ Уведомление отправлено для чата {chat_id}")
+            except Exception as e:
+                logger.error(f"❌ Ошибка отправки уведомления: {e}")
         
         return  # Не обрабатываем дальше
     
@@ -642,6 +660,25 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def refresh_all_chats(query, context):
     try:
+        # Получаем чаты из БД
+        chats = get_user_chats(YOUR_USER_ID)
+        
+        # Пытаемся найти новые чаты через get_updates
+        try:
+            updates = await context.bot.get_updates(limit=50)
+            added = 0
+            for update in updates:
+                if update.message and update.message.chat:
+                    chat = update.message.chat
+                    if chat.type in ["group", "supergroup"]:
+                        if add_chat_to_db(YOUR_USER_ID, chat.id, chat.title, chat.type):
+                            added += 1
+            if added > 0:
+                logger.info(f"Добавлено {added} новых чатов через get_updates")
+        except Exception as e:
+            logger.error(f"Ошибка сканирования: {e}")
+        
+        # Обновляем список
         chats = get_user_chats(YOUR_USER_ID)
         
         await query.edit_message_text(
@@ -649,11 +686,13 @@ async def refresh_all_chats(query, context):
             f"📋 Всего чатов: {len(chats)}\n\n"
             f"<i>Чтобы добавить чат:\n"
             f"1. Добавьте бота в чат\n"
-            f"2. Напишите любое сообщение в чате</i>",
+            f"2. Напишите любое сообщение в чате\n"
+            f"3. Нажмите 'Обновить чаты' снова</i>",
             parse_mode='HTML',
             reply_markup=get_main_keyboard()
         )
     except Exception as e:
+        logger.error(f"Ошибка обновления: {e}")
         await query.edit_message_text(
             f"❌ Ошибка: {str(e)}",
             reply_markup=get_main_keyboard()
@@ -682,11 +721,18 @@ def main():
         # Обработчики
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CallbackQueryHandler(handle_callback))
-        application.add_handler(MessageHandler(filters.ALL, handle_all_messages))
+        
+        # ВАЖНО: Обработчик для ВСЕХ сообщений
+        application.add_handler(MessageHandler(
+            filters.ALL, 
+            handle_all_messages
+        ))
+        
         application.add_error_handler(error_handler)
         
         print("✅ Бот успешно запущен!")
         print("🔄 Ожидание сообщений...")
+        print("📌 Бот будет добавлять чаты когда вы пишете в них")
         print("❌ Чтобы остановить бота, нажмите Ctrl+C")
         print("=" * 50)
         
