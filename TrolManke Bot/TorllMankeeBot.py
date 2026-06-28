@@ -1,12 +1,10 @@
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
-from telegram.request import HTTPXRequest
 import sqlite3
 import os
 import sys
-from datetime import datetime, timedelta
-import asyncio
+from datetime import datetime
 
 # ===== КОНФИГУРАЦИЯ =====
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -26,14 +24,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Глобальные переменные
-user_states = {}  # {user_id: {'action': 'send_to', 'chat_id': int}}
-tracked_chats = []  # Список отслеживаемых чатов
-last_selected_chat = None  # Последний выбранный чат для быстрой отправки
+user_states = {}
+tracked_chats = []
+last_selected_chat = None
 
 
 # ===== БАЗА ДАННЫХ =====
 def init_db():
-    """Инициализация всех баз данных"""
     try:
         conn = sqlite3.connect(DB_NAME)
         cursor = conn.cursor()
@@ -174,7 +171,6 @@ def cleanup_old_cache():
 
 # ===== КЛАВИАТУРЫ =====
 def get_main_keyboard():
-    """Главное меню"""
     keyboard = [
         [InlineKeyboardButton("📋 Мои чаты", callback_data="list_chats")],
         [InlineKeyboardButton("📸 Отправить медиа", callback_data="send_media")],
@@ -182,14 +178,12 @@ def get_main_keyboard():
         [InlineKeyboardButton("🔄 Обновить чаты", callback_data="refresh_chats")]
     ]
     
-    # Если есть последний выбранный чат - добавляем кнопку быстрой отправки
     if last_selected_chat:
         keyboard.insert(0, [InlineKeyboardButton("⚡ Быстрая отправка", callback_data="quick_send")])
     
     return InlineKeyboardMarkup(keyboard)
 
 def get_quick_send_keyboard():
-    """Клавиатура быстрой отправки"""
     keyboard = [
         [InlineKeyboardButton("📝 Текст", callback_data="quick_text")],
         [InlineKeyboardButton("📷 Фото", callback_data="quick_photo")],
@@ -200,7 +194,6 @@ def get_quick_send_keyboard():
     return InlineKeyboardMarkup(keyboard)
 
 def get_chats_keyboard(user_id, page=0, per_page=5):
-    """Клавиатура со списком чатов"""
     chats = get_user_chats(user_id)
     keyboard = []
     
@@ -208,7 +201,6 @@ def get_chats_keyboard(user_id, page=0, per_page=5):
     end_idx = min(start_idx + per_page, len(chats))
     
     for chat_id, chat_title, chat_type in chats[start_idx:end_idx]:
-        # Отмечаем последний выбранный чат
         is_selected = (chat_id == last_selected_chat)
         prefix = "⭐ " if is_selected else ""
         keyboard.append([
@@ -231,7 +223,6 @@ def get_chats_keyboard(user_id, page=0, per_page=5):
     return InlineKeyboardMarkup(keyboard)
 
 def get_media_keyboard():
-    """Клавиатура выбора типа медиа"""
     keyboard = [
         [InlineKeyboardButton("📷 Фото", callback_data="media_photo")],
         [InlineKeyboardButton("🎥 Видео", callback_data="media_video")],
@@ -241,7 +232,6 @@ def get_media_keyboard():
     return InlineKeyboardMarkup(keyboard)
 
 def get_chat_actions_keyboard(chat_id, is_tracking=False):
-    """Клавиатура действий для чата"""
     keyboard = []
     
     if is_tracking:
@@ -259,9 +249,8 @@ def get_chat_actions_keyboard(chat_id, is_tracking=False):
     return InlineKeyboardMarkup(keyboard)
 
 
-# ===== ОБРАБОТЧИКИ КОМАНД =====
+# ===== ОБРАБОТЧИКИ =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /start"""
     user_id = update.effective_user.id
     
     if user_id != YOUR_USER_ID:
@@ -280,18 +269,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return
     
-    # Показываем главное меню
     await update.message.reply_text(
-        "👋 <b>Главное меню</b>\n\n"
-        "Выберите действие:",
+        "👋 <b>Главное меню</b>\n\nВыберите действие:",
         parse_mode='HTML',
         reply_markup=get_main_keyboard()
     )
 
 
-# ===== ОБРАБОТЧИКИ CALLBACK =====
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик нажатий на кнопки"""
     global last_selected_chat, tracked_chats
     
     query = update.callback_query
@@ -303,7 +288,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     data = query.data
     
-    # Главное меню
     if data == "main_menu":
         await query.edit_message_text(
             "👋 <b>Главное меню</b>\n\nВыберите действие:",
@@ -311,7 +295,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_main_keyboard()
         )
     
-    # Быстрая отправка
     elif data == "quick_send":
         if not last_selected_chat:
             await query.edit_message_text(
@@ -343,17 +326,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=get_main_keyboard()
             )
     
-    # Быстрая отправка текста
     elif data == "quick_text":
         user_states[user_id] = {'action': 'send_message', 'chat_id': last_selected_chat}
         await query.edit_message_text(
             f"✏️ <b>Введите текст для отправки</b>\n\n"
-            f"Чат: <code>{last_selected_chat}</code>\n\n"
-            "Просто напишите сообщение в этот чат.",
+            f"Чат: <code>{last_selected_chat}</code>",
             parse_mode='HTML'
         )
     
-    # Быстрая отправка медиа
     elif data in ["quick_photo", "quick_video", "quick_document"]:
         media_type = data.split("_")[1]
         user_states[user_id] = {
@@ -365,102 +345,73 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         emoji = {"photo": "📷", "video": "🎥", "document": "📄"}.get(media_type, "📎")
         await query.edit_message_text(
             f"{emoji} <b>Отправьте {media_type}</b>\n\n"
-            f"Чат: <code>{last_selected_chat}</code>\n\n"
-            f"Просто отправьте {media_type} в этот чат.",
+            f"Чат: <code>{last_selected_chat}</code>",
             parse_mode='HTML'
         )
     
-    # Список чатов
     elif data == "list_chats":
         await show_chats(query, user_id, 0)
     
-    # Отслеживание чата
     elif data == "track_chat":
         await show_chats_for_tracking(query, user_id)
     
-    # Пагинация
     elif data.startswith("page_"):
         page = int(data.split("_")[1])
         await show_chats(query, user_id, page)
     
-    # Отправка медиа
     elif data == "send_media":
         await query.edit_message_text(
-            "📤 <b>Выберите тип медиа</b>\n\n"
-            "После выбора отправьте файл следующим сообщением:",
+            "📤 <b>Выберите тип медиа</b>\n\nПосле выбора отправьте файл:",
             parse_mode='HTML',
             reply_markup=get_media_keyboard()
         )
     
-    # Выбор типа медиа
     elif data in ["media_photo", "media_video", "media_document"]:
         media_type = data.split("_")[1]
         user_states[user_id] = {'action': 'send_media', 'media_type': media_type}
         await show_chats_for_media(query, user_id, media_type)
     
-    # Обновить чаты
     elif data == "refresh_chats":
         await query.edit_message_text(
-            "🔄 <b>Обновление чатов...</b>\n\n"
-            "Бот сканирует все чаты, где он находится.",
+            "🔄 <b>Обновление чатов...</b>",
             parse_mode='HTML'
         )
         await refresh_all_chats(query, context)
     
-    # Действия с чатом
     elif data.startswith("chat_"):
         chat_id = int(data.split("_")[1])
         await show_chat_actions(query, user_id, chat_id)
     
-    # Выбрать для быстрой отправки
     elif data.startswith("select_quick_"):
         chat_id = int(data.split("_")[2])
         last_selected_chat = chat_id
         
         await query.edit_message_text(
-            f"⭐ <b>Чат выбран для быстрой отправки</b>\n\n"
-            f"Теперь в главном меню появится кнопка '⚡ Быстрая отправка'",
+            f"⭐ <b>Чат выбран для быстрой отправки</b>",
             parse_mode='HTML',
             reply_markup=get_main_keyboard()
         )
-        
-        # Отправляем уведомление
-        await context.bot.send_message(
-            chat_id=YOUR_USER_ID,
-            text=f"⭐ Выбран чат для быстрой отправки: {chat_id}"
-        )
     
-    # Отправить сообщение в чат
     elif data.startswith("send_to_"):
         chat_id = int(data.split("_")[2])
         user_states[user_id] = {'action': 'send_message', 'chat_id': chat_id}
         await query.edit_message_text(
             f"✏️ <b>Введите текст для отправки</b>\n\n"
-            f"Чат: <code>{chat_id}</code>\n\n"
-            "Просто напишите сообщение в этот чат.",
+            f"Чат: <code>{chat_id}</code>",
             parse_mode='HTML'
         )
     
-    # Начать отслеживание
     elif data.startswith("start_track_"):
         chat_id = int(data.split("_")[2])
         if chat_id not in tracked_chats:
             tracked_chats.append(chat_id)
         
         await query.edit_message_text(
-            f"👁 <b>Отслеживание включено</b>\n\n"
-            f"Чат: <code>{chat_id}</code>\n\n"
-            "Все сообщения будут пересылаться вам.\n"
-            "История хранится 24 часа.",
+            f"👁 <b>Отслеживание включено</b>\n\nЧат: <code>{chat_id}</code>",
             parse_mode='HTML',
             reply_markup=get_chat_actions_keyboard(chat_id, is_tracking=True)
         )
-        await context.bot.send_message(
-            chat_id=YOUR_USER_ID,
-            text=f"🟢 Начато отслеживание чата {chat_id}"
-        )
     
-    # Остановить отслеживание
     elif data.startswith("stop_track_"):
         chat_id = int(data.split("_")[2])
         if chat_id in tracked_chats:
@@ -469,27 +420,18 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         clear_cache_for_chat(chat_id)
         
         await query.edit_message_text(
-            f"🛑 <b>Отслеживание остановлено</b>\n\n"
-            f"Чат: <code>{chat_id}</code>\n\n"
-            "История сообщений очищена.",
+            f"🛑 <b>Отслеживание остановлено</b>\n\nЧат: <code>{chat_id}</code>",
             parse_mode='HTML',
             reply_markup=get_chat_actions_keyboard(chat_id, is_tracking=False)
         )
-        await context.bot.send_message(
-            chat_id=YOUR_USER_ID,
-            text=f"🔴 Отслеживание чата {chat_id} остановлено"
-        )
     
-    # Показать историю
     elif data.startswith("history_"):
         chat_id = int(data.split("_")[1])
         messages = get_cached_messages(chat_id)
         
         if not messages:
             await query.edit_message_text(
-                f"📭 <b>История пуста</b>\n\n"
-                f"Чат: <code>{chat_id}</code>\n\n"
-                "За последние 24 часа не было сообщений.",
+                f"📭 <b>История пуста</b>\n\nЧат: <code>{chat_id}</code>",
                 parse_mode='HTML',
                 reply_markup=get_chat_actions_keyboard(chat_id, is_tracking=True)
             )
@@ -509,39 +451,33 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_chat_actions_keyboard(chat_id, is_tracking=True)
         )
     
-    # Очистить историю
     elif data.startswith("clear_history_"):
         chat_id = int(data.split("_")[2])
         clear_cache_for_chat(chat_id)
         await query.edit_message_text(
-            f"🗑 <b>История очищена</b>\n\n"
-            f"Чат: <code>{chat_id}</code>",
+            f"🗑 <b>История очищена</b>\n\nЧат: <code>{chat_id}</code>",
             parse_mode='HTML',
             reply_markup=get_chat_actions_keyboard(chat_id, is_tracking=True)
         )
     
-    # Удалить чат
     elif data.startswith("delete_"):
         chat_id = int(data.split("_")[1])
         remove_chat_from_db(user_id, chat_id)
         if last_selected_chat == chat_id:
             last_selected_chat = None
         await query.edit_message_text(
-            f"🗑 <b>Чат удален</b>\n\n"
-            f"Чат: <code>{chat_id}</code>",
+            f"🗑 <b>Чат удален</b>\n\nЧат: <code>{chat_id}</code>",
             parse_mode='HTML',
             reply_markup=get_main_keyboard()
         )
 
 
 async def show_chats(query, user_id, page):
-    """Показывает список чатов"""
     chats = get_user_chats(user_id)
     
     if not chats:
         await query.edit_message_text(
-            "📭 <b>Нет сохраненных чатов</b>\n\n"
-            "Добавьте бота в чат и нажмите 'Обновить чаты'",
+            "📭 <b>Нет сохраненных чатов</b>\n\nДобавьте бота в чат и нажмите 'Обновить чаты'",
             parse_mode='HTML',
             reply_markup=get_main_keyboard()
         )
@@ -565,13 +501,11 @@ async def show_chats(query, user_id, page):
     )
 
 async def show_chats_for_tracking(query, user_id):
-    """Показывает чаты для отслеживания"""
     chats = get_user_chats(user_id)
     
     if not chats:
         await query.edit_message_text(
-            "📭 <b>Нет сохраненных чатов</b>\n\n"
-            "Сначала добавьте бота в чат.",
+            "📭 <b>Нет сохраненных чатов</b>",
             parse_mode='HTML',
             reply_markup=get_main_keyboard()
         )
@@ -590,21 +524,17 @@ async def show_chats_for_tracking(query, user_id):
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="main_menu")])
     
     await query.edit_message_text(
-        "👁 <b>Выберите чат для управления отслеживанием</b>\n\n"
-        "🟢 - отслеживается\n"
-        "⚪️ - не отслеживается",
+        "👁 <b>Выберите чат для управления отслеживанием</b>\n\n🟢 - отслеживается\n⚪️ - не отслеживается",
         parse_mode='HTML',
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 async def show_chats_for_media(query, user_id, media_type):
-    """Показывает чаты для отправки медиа"""
     chats = get_user_chats(user_id)
     
     if not chats:
         await query.edit_message_text(
-            "📭 <b>Нет сохраненных чатов</b>\n\n"
-            "Сначала добавьте бота в чат.",
+            "📭 <b>Нет сохраненных чатов</b>",
             parse_mode='HTML',
             reply_markup=get_main_keyboard()
         )
@@ -621,14 +551,12 @@ async def show_chats_for_media(query, user_id, media_type):
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="send_media")])
     
     await query.edit_message_text(
-        f"📤 <b>Выберите чат для отправки {media_type}</b>\n\n"
-        f"После выбора отправьте файл:",
+        f"📤 <b>Выберите чат для отправки {media_type}</b>",
         parse_mode='HTML',
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 async def show_chat_actions(query, user_id, chat_id):
-    """Показывает действия для чата"""
     is_tracking = chat_id in tracked_chats
     is_selected = chat_id == last_selected_chat
     
@@ -654,7 +582,6 @@ async def show_chat_actions(query, user_id, chat_id):
 
 # ===== ОБРАБОТЧИКИ СООБЩЕНИЙ =====
 async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик всех сообщений"""
     user_id = update.effective_user.id
     chat = update.effective_chat
     chat_id = chat.id
@@ -671,7 +598,6 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
                      f"👤 ID: <code>{user_id}</code>\n"
                      f"📛 Имя: {user.first_name or 'Нет'}\n"
                      f"🔗 Юзернейм: @{user.username or 'Нет'}\n"
-                     f"📝 Действие: Отправка сообщения\n"
                      f"🕐 Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
                 parse_mode='HTML'
             )
@@ -706,7 +632,7 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         photo=photo.file_id,
                         caption=update.message.caption
                     )
-                    await update.message.reply_text(f"✅ Фото отправлено в чат {chat_id}", reply_markup=get_main_keyboard())
+                    await update.message.reply_text(f"✅ Фото отправлено", reply_markup=get_main_keyboard())
                     del user_states[user_id]
                 
                 elif media_type == "video" and update.message.video:
@@ -716,7 +642,7 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         video=video.file_id,
                         caption=update.message.caption
                     )
-                    await update.message.reply_text(f"✅ Видео отправлено в чат {chat_id}", reply_markup=get_main_keyboard())
+                    await update.message.reply_text(f"✅ Видео отправлено", reply_markup=get_main_keyboard())
                     del user_states[user_id]
                 
                 elif media_type == "document" and update.message.document:
@@ -726,16 +652,16 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         document=doc.file_id,
                         caption=update.message.caption
                     )
-                    await update.message.reply_text(f"✅ Документ отправлен в чат {chat_id}", reply_markup=get_main_keyboard())
+                    await update.message.reply_text(f"✅ Документ отправлен", reply_markup=get_main_keyboard())
                     del user_states[user_id]
                 
                 else:
                     await update.message.reply_text(
-                        f"❌ Отправьте {media_type}, а не другой тип файла",
+                        f"❌ Отправьте {media_type}",
                         reply_markup=get_main_keyboard()
                     )
             except Exception as e:
-                await update.message.reply_text(f"❌ Ошибка при отправке: {e}")
+                await update.message.reply_text(f"❌ Ошибка: {e}")
         
         return
     
@@ -748,7 +674,6 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_media_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик выбора чата для медиа"""
     query = update.callback_query
     await query.answer()
     
@@ -770,9 +695,7 @@ async def handle_media_selection(update: Update, context: ContextTypes.DEFAULT_T
         
         emoji = {"photo": "📷", "video": "🎥", "document": "📄"}.get(media_type, "📎")
         await query.edit_message_text(
-            f"{emoji} <b>Отправьте {media_type}</b>\n\n"
-            f"Чат: <code>{chat_id}</code>\n\n"
-            f"Просто отправьте {media_type} в этот чат.",
+            f"{emoji} <b>Отправьте {media_type}</b>\n\nЧат: <code>{chat_id}</code>",
             parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔙 Отмена", callback_data="send_media")]
@@ -781,7 +704,6 @@ async def handle_media_selection(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def track_chat_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отслеживание сообщений в чате"""
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     chat = update.effective_chat
@@ -840,7 +762,7 @@ async def track_chat_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_info = f"@{username}" if username != "Нет" else first_name
     
     notification_text = (
-        f"📨 <b>Новое сообщение в чате</b>\n\n"
+        f"📨 <b>Новое сообщение</b>\n\n"
         f"👤 {user_info} (ID: {user_id})\n"
         f"💬 {message_text}\n"
         f"🕐 {time}"
@@ -869,25 +791,6 @@ async def track_chat_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
                     caption=notification_text[:1024],
                     parse_mode='HTML'
                 )
-            elif message_type == "audio":
-                await context.bot.send_audio(
-                    chat_id=YOUR_USER_ID,
-                    audio=file_id,
-                    caption=notification_text[:1024],
-                    parse_mode='HTML'
-                )
-            elif message_type == "voice":
-                await context.bot.send_voice(
-                    chat_id=YOUR_USER_ID,
-                    voice=file_id,
-                    caption=notification_text[:1024],
-                    parse_mode='HTML'
-                )
-            elif message_type == "sticker":
-                await context.bot.send_sticker(
-                    chat_id=YOUR_USER_ID,
-                    sticker=file_id
-                )
         else:
             await context.bot.send_message(
                 chat_id=YOUR_USER_ID,
@@ -899,10 +802,7 @@ async def track_chat_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def refresh_all_chats(query, context):
-    """Обновляет список чатов (упрощенная версия без ошибок)"""
     try:
-        # Просто добавляем текущие чаты из базы
-        # Бот автоматически добавляет чаты когда получает сообщения
         await query.edit_message_text(
             f"✅ <b>Чаты обновлены</b>\n\n"
             f"📋 Всего чатов: {len(get_user_chats(YOUR_USER_ID))}\n\n"
@@ -910,17 +810,11 @@ async def refresh_all_chats(query, context):
             parse_mode='HTML',
             reply_markup=get_main_keyboard()
         )
-        
     except Exception as e:
-        error_msg = f"❌ Ошибка: {str(e)}"
-        logger.error(error_msg)
-        try:
-            await query.edit_message_text(
-                error_msg,
-                reply_markup=get_main_keyboard()
-            )
-        except:
-            pass
+        await query.edit_message_text(
+            f"❌ Ошибка: {str(e)}",
+            reply_markup=get_main_keyboard()
+        )
 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -941,19 +835,8 @@ def main():
         init_db()
         cleanup_old_cache()
         
-        # Настройка HTTP клиента
-        http_client = HTTPXRequest(
-            connection_pool_size=8,
-            pool_timeout=30.0,
-            read_timeout=30.0,
-            write_timeout=30.0,
-            connect_timeout=30.0
-        )
-        
-        application = Application.builder()\
-            .token(TOKEN)\
-            .http_client(http_client)\
-            .build()
+        # Просто создаем приложение без HTTPClient
+        application = Application.builder().token(TOKEN).build()
         
         # Обработчики
         application.add_handler(CommandHandler("start", start))
@@ -967,7 +850,7 @@ def main():
         
         application.add_handler(MessageHandler(
             filters.ChatType.PRIVATE & (filters.PHOTO | filters.VIDEO | filters.Document.ALL),
-            handle_messages  # Теперь обрабатывается в handle_messages
+            handle_messages
         ))
         
         application.add_handler(MessageHandler(
