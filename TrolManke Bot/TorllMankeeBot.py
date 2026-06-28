@@ -4,9 +4,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 import sqlite3
 import os
 import sys
-import asyncio
 from datetime import datetime, timedelta
-import json
 
 # ===== КОНФИГУРАЦИЯ =====
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -255,15 +253,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id != YOUR_USER_ID:
         # Отправляем уведомление владельцу
         user = update.effective_user
-        await context.bot.send_message(
-            chat_id=YOUR_USER_ID,
-            text=f"⚠️ <b>Попытка использования бота</b>\n\n"
-                 f"👤 ID: <code>{user_id}</code>\n"
-                 f"📛 Имя: {user.first_name or 'Нет'}\n"
-                 f"🔗 Юзернейм: @{user.username or 'Нет'}\n"
-                 f"🕐 Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            parse_mode='HTML'
-        )
+        try:
+            await context.bot.send_message(
+                chat_id=YOUR_USER_ID,
+                text=f"⚠️ <b>Попытка использования бота</b>\n\n"
+                     f"👤 ID: <code>{user_id}</code>\n"
+                     f"📛 Имя: {user.first_name or 'Нет'}\n"
+                     f"🔗 Юзернейм: @{user.username or 'Нет'}\n"
+                     f"🕐 Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                parse_mode='HTML'
+            )
+        except:
+            pass
         return  # Ничего не отвечаем пользователю
     
     # Для владельца показываем меню
@@ -352,7 +353,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("start_track_"):
         chat_id = int(data.split("_")[2])
         # Сохраняем состояние отслеживания
-        if not hasattr(context, 'tracked_chats'):
+        if not hasattr(context.bot_data, 'tracked_chats'):
             context.bot_data['tracked_chats'] = []
         if chat_id not in context.bot_data['tracked_chats']:
             context.bot_data['tracked_chats'].append(chat_id)
@@ -373,9 +374,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Остановить отслеживание
     elif data.startswith("stop_track_"):
         chat_id = int(data.split("_")[2])
-        if hasattr(context, 'bot_data') and 'tracked_chats' in context.bot_data:
-            if chat_id in context.bot_data['tracked_chats']:
-                context.bot_data['tracked_chats'].remove(chat_id)
+        if 'tracked_chats' in context.bot_data and chat_id in context.bot_data['tracked_chats']:
+            context.bot_data['tracked_chats'].remove(chat_id)
         
         # Очищаем кэш
         clear_cache_for_chat(chat_id)
@@ -506,7 +506,7 @@ async def show_chats_for_media(query, user_id, media_type):
 async def show_chat_actions(query, user_id, chat_id):
     """Показывает действия для чата"""
     is_tracking = False
-    if hasattr(query, 'bot_data') and 'tracked_chats' in query.bot_data:
+    if 'tracked_chats' in query.bot_data:
         is_tracking = chat_id in query.bot_data['tracked_chats']
     
     # Получаем информацию о чате
@@ -544,16 +544,19 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id != YOUR_USER_ID:
         # Отправляем уведомление владельцу
         user = update.effective_user
-        await context.bot.send_message(
-            chat_id=YOUR_USER_ID,
-            text=f"⚠️ <b>Попытка использования бота</b>\n\n"
-                 f"👤 ID: <code>{user_id}</code>\n"
-                 f"📛 Имя: {user.first_name or 'Нет'}\n"
-                 f"🔗 Юзернейм: @{user.username or 'Нет'}\n"
-                 f"📝 Действие: Отправка сообщения\n"
-                 f"🕐 Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            parse_mode='HTML'
-        )
+        try:
+            await context.bot.send_message(
+                chat_id=YOUR_USER_ID,
+                text=f"⚠️ <b>Попытка использования бота</b>\n\n"
+                     f"👤 ID: <code>{user_id}</code>\n"
+                     f"📛 Имя: {user.first_name or 'Нет'}\n"
+                     f"🔗 Юзернейм: @{user.username or 'Нет'}\n"
+                     f"📝 Действие: Отправка сообщения\n"
+                     f"🕐 Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                parse_mode='HTML'
+            )
+        except:
+            pass
         return  # Ничего не отвечаем пользователю
     
     # Обработка состояния пользователя
@@ -709,7 +712,7 @@ async def track_chat_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     
     # Проверяем, отслеживается ли этот чат
-    if not hasattr(context, 'bot_data') or 'tracked_chats' not in context.bot_data:
+    if 'tracked_chats' not in context.bot_data:
         return
     
     if chat_id not in context.bot_data['tracked_chats']:
@@ -865,9 +868,8 @@ def main():
         print("Запуск Telegram бота...")
         print("=" * 50)
         
-        if TOKEN == "YOUR_BOT_TOKEN_HERE":
+        if not TOKEN or TOKEN == "YOUR_BOT_TOKEN_HERE":
             print("❌ ОШИБКА: Замените TOKEN на ваш реальный токен!")
-            input("Нажмите Enter для выхода...")
             return
         
         init_db()
@@ -883,19 +885,19 @@ def main():
         # Обработчики команд
         application.add_handler(CommandHandler("start", start))
         
-        # Callback обработчики
-        application.add_handler(CallbackQueryHandler(handle_callback))
+        # Callback обработчики - ВАЖНО: сначала общий, потом специфичный
         application.add_handler(CallbackQueryHandler(handle_media_selection, pattern="^media_chat_"))
+        application.add_handler(CallbackQueryHandler(handle_callback))
         
         # Обработчики сообщений
         application.add_handler(MessageHandler(
-            filters.ChatType.PRIVATE & ~filters.COMMAND, 
+            filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, 
             handle_messages
         ))
         
-        # Обработчик для медиа файлов
+        # Обработчик для медиа файлов (исправлено)
         application.add_handler(MessageHandler(
-            filters.ChatType.PRIVATE & (filters.PHOTO | filters.VIDEO | filters.DOCUMENT),
+            filters.ChatType.PRIVATE & (filters.PHOTO | filters.VIDEO | filters.Document.ALL),
             handle_media_files
         ))
         
@@ -917,7 +919,6 @@ def main():
     except Exception as e:
         logger.error(f"Критическая ошибка при запуске: {e}")
         print(f"❌ Критическая ошибка: {e}")
-        input("Нажмите Enter для выхода...")
 
 if __name__ == "__main__":
     main()
