@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 user_states = {}
 tracked_chats = []
 fixed_chat = None
+BOT_USERNAME = None
 
 
 # ===== БАЗА ДАННЫХ =====
@@ -191,7 +192,13 @@ def get_tracking_keyboard():
 
 # ===== ОБРАБОТЧИКИ =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global BOT_USERNAME
+    
     user_id = update.effective_user.id
+    
+    if not BOT_USERNAME:
+        bot_info = await context.bot.get_me()
+        BOT_USERNAME = bot_info.username
     
     if user_id != YOUR_USER_ID:
         user = update.effective_user
@@ -438,23 +445,103 @@ async def show_chat_actions(query, user_id, chat_id):
     )
 
 
-# ===== ОБРАБОТЧИКИ СООБЩЕНИЙ =====
+# ===== ФУНКЦИЯ ДЛЯ ОТСЛЕЖИВАНИЯ С ПОМЕТКАМИ =====
+async def send_tracking_notification(context, chat, user, message_text, file_id=None, file_type=None, is_reply_to_bot=False):
+    """Отправляет уведомление с пометкой"""
+    username = user.username or "Нет"
+    first_name = user.first_name or "Нет"
+    user_id = user.id
+    time = datetime.now().strftime("%H:%M:%S")
+    user_info = f"@{username}" if username != "Нет" else first_name
+    
+    # Определяем пометку
+    if is_reply_to_bot:
+        label = "🤖 <b>ОТВЕТ БОТУ</b>"
+    else:
+        label = "💬 <b>ОБЫЧНОЕ СООБЩЕНИЕ</b>"
+    
+    notification = (
+        f"📨 <b>Отслеживание</b>\n"
+        f"{label}\n\n"
+        f"📌 {chat.title}\n"
+        f"👤 {user_info} (ID: {user_id})\n"
+        f"💬 {message_text}\n"
+        f"🕐 {time}"
+    )
+    
+    try:
+        if file_type == "photo":
+            await context.bot.send_photo(
+                chat_id=YOUR_USER_ID,
+                photo=file_id,
+                caption=notification[:1024],
+                parse_mode='HTML'
+            )
+        elif file_type == "video":
+            await context.bot.send_video(
+                chat_id=YOUR_USER_ID,
+                video=file_id,
+                caption=notification[:1024],
+                parse_mode='HTML'
+            )
+        elif file_type == "document":
+            await context.bot.send_document(
+                chat_id=YOUR_USER_ID,
+                document=file_id,
+                caption=notification[:1024],
+                parse_mode='HTML'
+            )
+        elif file_type == "audio":
+            await context.bot.send_audio(
+                chat_id=YOUR_USER_ID,
+                audio=file_id,
+                caption=notification[:1024],
+                parse_mode='HTML'
+            )
+        elif file_type == "voice":
+            await context.bot.send_voice(
+                chat_id=YOUR_USER_ID,
+                voice=file_id,
+                caption=notification[:1024],
+                parse_mode='HTML'
+            )
+        elif file_type == "sticker":
+            await context.bot.send_sticker(
+                chat_id=YOUR_USER_ID,
+                sticker=file_id
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=YOUR_USER_ID,
+                text=notification,
+                parse_mode='HTML'
+            )
+        logger.info(f"✅ Уведомление отправлено для чата {chat.id}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка отправки уведомления: {e}")
+
+
+# ===== ОБРАБОТЧИК СООБЩЕНИЙ =====
 async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Главный обработчик всех сообщений"""
+    global BOT_USERNAME
+    
     user_id = update.effective_user.id
     chat = update.effective_chat
     chat_id = chat.id
     chat_type = chat.type
     
-    # Логируем ВСЕ сообщения для отладки
+    if not BOT_USERNAME:
+        bot_info = await context.bot.get_me()
+        BOT_USERNAME = bot_info.username
+    
     logger.info(f"📩 Сообщение от {user_id} в {chat_id} ({chat_type})")
     
-    # ===== АВТОМАТИЧЕСКОЕ ДОБАВЛЕНИЕ ЧАТОВ =====
+    # ===== ГРУППОВЫЕ ЧАТЫ =====
     if chat_type in ["group", "supergroup"]:
         chat_title = chat.title or "Без названия"
-        logger.info(f"📌 Групповой чат: {chat_title}")
         
-        # Добавляем чат для владельца (при ЛЮБОМ сообщении)
+        # Добавляем чат для владельца
         if user_id == YOUR_USER_ID:
             if add_chat_to_db(YOUR_USER_ID, chat_id, chat_title, chat_type):
                 await context.bot.send_message(
@@ -462,130 +549,64 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
                     text=f"✅ Чат добавлен: {chat_title}\nID: <code>{chat_id}</code>",
                     parse_mode='HTML'
                 )
-        else:
-            # Уведомление о сообщении от другого пользователя
-            user = update.effective_user
-            try:
-                message_text = update.message.text if update.message.text else "Медиа"
-                await context.bot.send_message(
-                    chat_id=YOUR_USER_ID,
-                    text=f"📨 <b>Сообщение в чате</b>\n\n"
-                         f"📌 {chat.title}\n"
-                         f"👤 {user.first_name} (@{user.username or 'Нет'})\n"
-                         f"💬 {message_text[:100]}",
-                    parse_mode='HTML'
-                )
-            except Exception as e:
-                logger.error(f"Ошибка уведомления: {e}")
         
-        # ===== ОТСЛЕЖИВАНИЕ =====
+        # ===== ОТСЛЕЖИВАНИЕ - ТОЛЬКО ЕСЛИ ВКЛЮЧЕНО =====
         if chat_id in tracked_chats:
             user = update.effective_user
-            username = user.username or "Нет"
-            first_name = user.first_name or "Нет"
+            
+            # Проверяем, является ли сообщение ответом на бота
+            is_reply_to_bot = False
+            if update.message and update.message.reply_to_message:
+                reply_to = update.message.reply_to_message
+                if reply_to.from_user and reply_to.from_user.is_bot:
+                    if reply_to.from_user.username == BOT_USERNAME:
+                        is_reply_to_bot = True
             
             # Определяем тип сообщения
             message_text = ""
             file_id = None
             file_type = None
             
-            if update.message.text:
-                message_text = update.message.text
-            elif update.message.photo:
-                message_text = "📷 Фото"
-                file_id = update.message.photo[-1].file_id
-                file_type = "photo"
-            elif update.message.video:
-                message_text = "🎥 Видео"
-                file_id = update.message.video.file_id
-                file_type = "video"
-            elif update.message.document:
-                message_text = f"📄 {update.message.document.file_name or 'Документ'}"
-                file_id = update.message.document.file_id
-                file_type = "document"
-            elif update.message.audio:
-                message_text = "🎵 Аудио"
-                file_id = update.message.audio.file_id
-                file_type = "audio"
-            elif update.message.voice:
-                message_text = "🎤 Голосовое"
-                file_id = update.message.voice.file_id
-                file_type = "voice"
-            elif update.message.sticker:
-                message_text = "🎨 Стикер"
-                file_id = update.message.sticker.file_id
-                file_type = "sticker"
-            else:
-                message_text = "📎 Другое сообщение"
-            
-            time = datetime.now().strftime("%H:%M:%S")
-            user_info = f"@{username}" if username != "Нет" else first_name
-            
-            notification = (
-                f"📨 <b>Отслеживание</b>\n\n"
-                f"📌 {chat.title}\n"
-                f"👤 {user_info} (ID: {user_id})\n"
-                f"💬 {message_text}\n"
-                f"🕐 {time}"
-            )
-            
-            try:
-                # Отправляем медиа если есть
-                if file_type == "photo":
-                    await context.bot.send_photo(
-                        chat_id=YOUR_USER_ID,
-                        photo=file_id,
-                        caption=notification[:1024],
-                        parse_mode='HTML'
-                    )
-                elif file_type == "video":
-                    await context.bot.send_video(
-                        chat_id=YOUR_USER_ID,
-                        video=file_id,
-                        caption=notification[:1024],
-                        parse_mode='HTML'
-                    )
-                elif file_type == "document":
-                    await context.bot.send_document(
-                        chat_id=YOUR_USER_ID,
-                        document=file_id,
-                        caption=notification[:1024],
-                        parse_mode='HTML'
-                    )
-                elif file_type == "audio":
-                    await context.bot.send_audio(
-                        chat_id=YOUR_USER_ID,
-                        audio=file_id,
-                        caption=notification[:1024],
-                        parse_mode='HTML'
-                    )
-                elif file_type == "voice":
-                    await context.bot.send_voice(
-                        chat_id=YOUR_USER_ID,
-                        voice=file_id,
-                        caption=notification[:1024],
-                        parse_mode='HTML'
-                    )
-                elif file_type == "sticker":
-                    await context.bot.send_sticker(
-                        chat_id=YOUR_USER_ID,
-                        sticker=file_id
-                    )
+            if update.message:
+                if update.message.text:
+                    message_text = update.message.text
+                elif update.message.photo:
+                    message_text = "📷 Фото"
+                    file_id = update.message.photo[-1].file_id
+                    file_type = "photo"
+                elif update.message.video:
+                    message_text = "🎥 Видео"
+                    file_id = update.message.video.file_id
+                    file_type = "video"
+                elif update.message.document:
+                    message_text = f"📄 {update.message.document.file_name or 'Документ'}"
+                    file_id = update.message.document.file_id
+                    file_type = "document"
+                elif update.message.audio:
+                    message_text = "🎵 Аудио"
+                    file_id = update.message.audio.file_id
+                    file_type = "audio"
+                elif update.message.voice:
+                    message_text = "🎤 Голосовое"
+                    file_id = update.message.voice.file_id
+                    file_type = "voice"
+                elif update.message.sticker:
+                    message_text = "🎨 Стикер"
+                    file_id = update.message.sticker.file_id
+                    file_type = "sticker"
                 else:
-                    await context.bot.send_message(
-                        chat_id=YOUR_USER_ID,
-                        text=notification,
-                        parse_mode='HTML'
-                    )
-                logger.info(f"✅ Уведомление отправлено для чата {chat_id}")
-            except Exception as e:
-                logger.error(f"❌ Ошибка отправки уведомления: {e}")
+                    message_text = "📎 Другое сообщение"
+                
+                # Отправляем уведомление с пометкой
+                await send_tracking_notification(
+                    context, chat, user, message_text, 
+                    file_id, file_type, is_reply_to_bot
+                )
         
         return  # Не обрабатываем дальше
     
     # ===== ПРИВАТНЫЙ ЧАТ =====
     if chat_type == "private":
-        # Если не владелец - игнорируем
         if user_id != YOUR_USER_ID:
             return
         
@@ -593,8 +614,7 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
         if user_id in user_states:
             state = user_states[user_id]
             
-            # Отправка текста
-            if state['action'] == 'send_message' and update.message.text:
+            if state['action'] == 'send_message' and update.message and update.message.text:
                 chat_id = state['chat_id']
                 try:
                     await context.bot.send_message(chat_id=chat_id, text=update.message.text)
@@ -607,8 +627,7 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
                     await update.message.reply_text(f"❌ Ошибка: {e}")
                 return
             
-            # Отправка медиа
-            elif state['action'] == 'send_media':
+            elif state['action'] == 'send_media' and update.message:
                 chat_id = state['chat_id']
                 media_type = state['media_type']
                 
@@ -650,7 +669,7 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
                 return
         
         # Показываем меню
-        if not update.message.text or not update.message.text.startswith('/'):
+        if not update.message or not update.message.text or not update.message.text.startswith('/'):
             await update.message.reply_text(
                 "👋 <b>Главное меню</b>\n\nВыберите действие:",
                 parse_mode='HTML',
@@ -660,10 +679,8 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def refresh_all_chats(query, context):
     try:
-        # Получаем чаты из БД
         chats = get_user_chats(YOUR_USER_ID)
         
-        # Пытаемся найти новые чаты через get_updates
         try:
             updates = await context.bot.get_updates(limit=50)
             added = 0
@@ -678,7 +695,6 @@ async def refresh_all_chats(query, context):
         except Exception as e:
             logger.error(f"Ошибка сканирования: {e}")
         
-        # Обновляем список
         chats = get_user_chats(YOUR_USER_ID)
         
         await query.edit_message_text(
@@ -718,21 +734,15 @@ def main():
         
         application = Application.builder().token(TOKEN).build()
         
-        # Обработчики
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CallbackQueryHandler(handle_callback))
-        
-        # ВАЖНО: Обработчик для ВСЕХ сообщений
-        application.add_handler(MessageHandler(
-            filters.ALL, 
-            handle_all_messages
-        ))
-        
+        application.add_handler(MessageHandler(filters.ALL, handle_all_messages))
         application.add_error_handler(error_handler)
         
         print("✅ Бот успешно запущен!")
         print("🔄 Ожидание сообщений...")
         print("📌 Бот будет добавлять чаты когда вы пишете в них")
+        print("👁 Отслеживание работает ТОЛЬКО для включенных чатов")
         print("❌ Чтобы остановить бота, нажмите Ctrl+C")
         print("=" * 50)
         
