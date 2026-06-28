@@ -79,6 +79,7 @@ def add_chat_to_db(user_id, chat_id, chat_title, chat_type):
         )
         conn.commit()
         conn.close()
+        logger.info(f"✅ Чат добавлен в БД: {chat_title} ({chat_id})")
         return True
     except Exception as e:
         logger.error(f"Ошибка добавления чата: {e}")
@@ -477,7 +478,11 @@ async def show_chats(query, user_id, page):
     
     if not chats:
         await query.edit_message_text(
-            "📭 <b>Нет сохраненных чатов</b>\n\nДобавьте бота в чат и нажмите 'Обновить чаты'",
+            "📭 <b>Нет сохраненных чатов</b>\n\n"
+            "Чтобы добавить чат:\n"
+            "1. Добавьте бота в чат\n"
+            "2. Напишите любое сообщение в чате\n"
+            "3. Нажмите 'Обновить чаты'",
             parse_mode='HTML',
             reply_markup=get_main_keyboard()
         )
@@ -580,46 +585,70 @@ async def show_chat_actions(query, user_id, chat_id):
     )
 
 
-# ===== ОБРАБОТЧИКИ СООБЩЕНИЙ =====
-async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ===== ГЛАВНЫЙ ОБРАБОТЧИК ВСЕХ СООБЩЕНИЙ =====
+async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик всех сообщений - добавляет чаты и обрабатывает команды"""
     user_id = update.effective_user.id
     chat = update.effective_chat
     chat_id = chat.id
+    chat_type = chat.type
     
-    if chat.type in ["group", "supergroup"] and user_id == YOUR_USER_ID:
-        add_chat_to_db(YOUR_USER_ID, chat_id, chat.title, chat.type)
+    # Логируем все сообщения для отладки
+    logger.info(f"Получено сообщение от {user_id} в чат {chat_id} ({chat_type})")
     
-    if user_id != YOUR_USER_ID:
-        user = update.effective_user
-        try:
-            await context.bot.send_message(
-                chat_id=YOUR_USER_ID,
-                text=f"⚠️ <b>Попытка использования бота</b>\n\n"
-                     f"👤 ID: <code>{user_id}</code>\n"
-                     f"📛 Имя: {user.first_name or 'Нет'}\n"
-                     f"🔗 Юзернейм: @{user.username or 'Нет'}\n"
-                     f"🕐 Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                parse_mode='HTML'
-            )
-        except:
-            pass
+    # ===== АВТОМАТИЧЕСКОЕ ДОБАВЛЕНИЕ ЧАТОВ =====
+    # Добавляем чат если это групповой чат и пользователь - владелец
+    if chat_type in ["group", "supergroup"]:
+        chat_title = chat.title or "Без названия"
+        
+        # Добавляем чат для владельца
+        if user_id == YOUR_USER_ID:
+            if add_chat_to_db(YOUR_USER_ID, chat_id, chat_title, chat_type):
+                logger.info(f"✅ Чат добавлен: {chat_title}")
+                # Отправляем подтверждение в чат
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text="✅ Бот активирован в этом чате!"
+                )
+        else:
+            # Если пишет не владелец - уведомляем владельца
+            user = update.effective_user
+            try:
+                await context.bot.send_message(
+                    chat_id=YOUR_USER_ID,
+                    text=f"⚠️ <b>Сообщение в чате</b>\n\n"
+                         f"📌 Чат: {chat.title}\n"
+                         f"👤 Пользователь: {user.first_name} (@{user.username or 'Нет'})\n"
+                         f"💬 {update.message.text[:100] if update.message.text else 'Медиа'}",
+                    parse_mode='HTML'
+                )
+            except:
+                pass
+            return  # Не обрабатываем дальше
+    
+    # Если это приватный чат и не владелец - игнорируем
+    if chat_type == "private" and user_id != YOUR_USER_ID:
         return
     
-    if user_id in user_states:
+    # ===== ОБРАБОТКА СОСТОЯНИЙ =====
+    if user_id in user_states and chat_type == "private":
         state = user_states[user_id]
         
+        # Отправка текста
         if state['action'] == 'send_message' and update.message.text:
             chat_id = state['chat_id']
             try:
                 await context.bot.send_message(chat_id=chat_id, text=update.message.text)
                 await update.message.reply_text(
-                    f"✅ Сообщение отправлено в чат {chat_id}",
+                    f"✅ Сообщение отправлено",
                     reply_markup=get_main_keyboard()
                 )
                 del user_states[user_id]
             except Exception as e:
                 await update.message.reply_text(f"❌ Ошибка: {e}")
+            return
         
+        # Отправка медиа
         elif state['action'] == 'send_media_file':
             chat_id = state['chat_id']
             media_type = state['media_type']
@@ -662,15 +691,17 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
             except Exception as e:
                 await update.message.reply_text(f"❌ Ошибка: {e}")
-        
-        return
+            return
     
-    if chat.type == "private":
-        await update.message.reply_text(
-            "👋 <b>Главное меню</b>\n\nВыберите действие:",
-            parse_mode='HTML',
-            reply_markup=get_main_keyboard()
-        )
+    # ===== ПОКАЗЫВАЕМ МЕНЮ В ПРИВАТЕ =====
+    if chat_type == "private" and user_id == YOUR_USER_ID:
+        # Если это не команда и нет состояния - показываем меню
+        if not update.message.text or not update.message.text.startswith('/'):
+            await update.message.reply_text(
+                "👋 <b>Главное меню</b>\n\nВыберите действие:",
+                parse_mode='HTML',
+                reply_markup=get_main_keyboard()
+            )
 
 
 async def handle_media_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -704,6 +735,7 @@ async def handle_media_selection(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def track_chat_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отслеживание сообщений в чате"""
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     chat = update.effective_chat
@@ -769,7 +801,7 @@ async def track_chat_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
     
     try:
-        if file_id and message_type in ["photo", "video", "document", "audio", "voice", "sticker"]:
+        if file_id and message_type in ["photo", "video", "document"]:
             if message_type == "photo":
                 await context.bot.send_photo(
                     chat_id=YOUR_USER_ID,
@@ -803,10 +835,16 @@ async def track_chat_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def refresh_all_chats(query, context):
     try:
+        # Просто показываем сколько чатов в базе
+        chats = get_user_chats(YOUR_USER_ID)
+        
         await query.edit_message_text(
             f"✅ <b>Чаты обновлены</b>\n\n"
-            f"📋 Всего чатов: {len(get_user_chats(YOUR_USER_ID))}\n\n"
-            f"<i>Бот автоматически добавляет чаты, когда вы пишете в них.</i>",
+            f"📋 Всего чатов: {len(chats)}\n\n"
+            f"<i>Чтобы добавить чат:\n"
+            f"1. Добавьте бота в чат\n"
+            f"2. Напишите любое сообщение в чате\n"
+            f"3. Нажмите 'Обновить чаты' снова</i>",
             parse_mode='HTML',
             reply_markup=get_main_keyboard()
         )
@@ -835,24 +873,22 @@ def main():
         init_db()
         cleanup_old_cache()
         
-        # Просто создаем приложение без HTTPClient
         application = Application.builder().token(TOKEN).build()
         
-        # Обработчики
+        # Обработчики команд
         application.add_handler(CommandHandler("start", start))
+        
+        # Callback обработчики
         application.add_handler(CallbackQueryHandler(handle_media_selection, pattern="^media_chat_"))
         application.add_handler(CallbackQueryHandler(handle_callback))
         
+        # ГЛАВНЫЙ ОБРАБОТЧИК ВСЕХ СООБЩЕНИЙ (приоритет выше)
         application.add_handler(MessageHandler(
-            filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, 
-            handle_messages
+            filters.ALL,
+            handle_all_messages
         ))
         
-        application.add_handler(MessageHandler(
-            filters.ChatType.PRIVATE & (filters.PHOTO | filters.VIDEO | filters.Document.ALL),
-            handle_messages
-        ))
-        
+        # Отслеживание чатов
         application.add_handler(MessageHandler(
             filters.ChatType.GROUP | filters.ChatType.SUPERGROUP,
             track_chat_messages
