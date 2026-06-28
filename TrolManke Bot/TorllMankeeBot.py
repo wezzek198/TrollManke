@@ -576,7 +576,7 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     chat_id = chat.id
     
-    # Если сообщение из чата и владелец - добавляем в кэш
+    # Если сообщение из чата и владелец - добавляем в БД
     if chat.type in ["group", "supergroup"] and user_id == YOUR_USER_ID:
         add_chat_to_db(YOUR_USER_ID, chat_id, chat.title, chat.type)
     
@@ -937,7 +937,6 @@ def main():
         cleanup_old_cache()
         
         # Настройка HTTP клиента с большим пулом соединений
-        # Увеличиваем таймаут и размер пула
         http_client = HTTPXRequest(
             connection_pool_size=8,
             pool_timeout=30.0,
