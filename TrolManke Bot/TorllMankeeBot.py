@@ -15,7 +15,7 @@ DB_NAME = "chat_bot.db"
 # Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.DEBUG,  # Меняем на DEBUG для детального лога
+    level=logging.INFO,
     handlers=[
         logging.FileHandler("bot.log"),
         logging.StreamHandler(sys.stdout)
@@ -28,6 +28,9 @@ user_states = {}
 tracked_chats = []
 fixed_chats = []
 BOT_USERNAME = None
+
+# Список скрытых пользователей (в памяти)
+hidden_users = []
 
 
 # ===== БАЗА ДАННЫХ =====
@@ -52,7 +55,6 @@ def init_db():
                 username TEXT,
                 first_name TEXT,
                 last_name TEXT,
-                is_blocked INTEGER DEFAULT 0,
                 last_message_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
@@ -63,68 +65,6 @@ def init_db():
         return True
     except Exception as e:
         logger.error(f"❌ Ошибка инициализации БД: {e}")
-        return False
-
-def is_user_blocked(user_id):
-    """Проверка блокировки с логированием"""
-    try:
-        conn = sqlite3.connect(DB_NAME)
-        cursor = conn.cursor()
-        cursor.execute('SELECT is_blocked FROM users WHERE user_id = ?', (user_id,))
-        result = cursor.fetchone()
-        conn.close()
-        
-        if result:
-            blocked = result[0] == 1
-            logger.info(f"🔍 Проверка блокировки {user_id}: {'ЗАБЛОКИРОВАН' if blocked else 'НЕ ЗАБЛОКИРОВАН'}")
-            return blocked
-        logger.info(f"🔍 Пользователь {user_id} не найден в БД")
-        return False
-    except Exception as e:
-        logger.error(f"❌ Ошибка проверки блокировки: {e}")
-        return False
-
-def block_user(user_id):
-    try:
-        conn = sqlite3.connect(DB_NAME)
-        cursor = conn.cursor()
-        
-        # Сначала проверяем есть ли пользователь
-        cursor.execute('SELECT user_id FROM users WHERE user_id = ?', (user_id,))
-        exists = cursor.fetchone()
-        
-        if exists:
-            cursor.execute('UPDATE users SET is_blocked = 1 WHERE user_id = ?', (user_id,))
-        else:
-            cursor.execute('INSERT INTO users (user_id, is_blocked) VALUES (?, 1)', (user_id,))
-        
-        conn.commit()
-        conn.close()
-        
-        logger.info(f"✅ Пользователь {user_id} ЗАБЛОКИРОВАН")
-        
-        # Проверяем что блокировка применилась
-        if is_user_blocked(user_id):
-            logger.info(f"✅ Блокировка {user_id} ПОДТВЕРЖДЕНА")
-            return True
-        else:
-            logger.error(f"❌ Блокировка {user_id} НЕ ПОДТВЕРДИЛАСЬ")
-            return False
-    except Exception as e:
-        logger.error(f"❌ Ошибка блокировки: {e}")
-        return False
-
-def unblock_user(user_id):
-    try:
-        conn = sqlite3.connect(DB_NAME)
-        cursor = conn.cursor()
-        cursor.execute('UPDATE users SET is_blocked = 0 WHERE user_id = ?', (user_id,))
-        conn.commit()
-        conn.close()
-        logger.info(f"✅ Пользователь {user_id} РАЗБЛОКИРОВАН")
-        return True
-    except Exception as e:
-        logger.error(f"❌ Ошибка разблокировки: {e}")
         return False
 
 def add_user_to_db(user_id, username, first_name, last_name):
@@ -146,7 +86,7 @@ def get_user(user_id):
     try:
         conn = sqlite3.connect(DB_NAME)
         cursor = conn.cursor()
-        cursor.execute('SELECT user_id, username, first_name, last_name, is_blocked FROM users WHERE user_id = ?', (user_id,))
+        cursor.execute('SELECT user_id, username, first_name, last_name FROM users WHERE user_id = ?', (user_id,))
         user = cursor.fetchone()
         conn.close()
         return user
@@ -158,28 +98,12 @@ def get_all_users():
     try:
         conn = sqlite3.connect(DB_NAME)
         cursor = conn.cursor()
-        cursor.execute('SELECT user_id, username, first_name, last_name, is_blocked, last_message_time FROM users ORDER BY is_blocked DESC, last_message_time DESC')
+        cursor.execute('SELECT user_id, username, first_name, last_name, last_message_time FROM users ORDER BY last_message_time DESC')
         users = cursor.fetchall()
         conn.close()
-        
-        # Логируем состояние
-        for u in users:
-            logger.info(f"👤 Пользователь {u[0]}: {'ЗАБЛОКИРОВАН' if u[4] else 'АКТИВЕН'}")
         return users
     except Exception as e:
         logger.error(f"❌ Ошибка получения пользователей: {e}")
-        return []
-
-def get_blocked_users():
-    try:
-        conn = sqlite3.connect(DB_NAME)
-        cursor = conn.cursor()
-        cursor.execute('SELECT user_id, username, first_name, last_name, last_message_time FROM users WHERE is_blocked = 1 ORDER BY last_message_time DESC')
-        users = cursor.fetchall()
-        conn.close()
-        return users
-    except Exception as e:
-        logger.error(f"❌ Ошибка получения заблокированных: {e}")
         return []
 
 def chat_exists(user_id, chat_id):
@@ -232,13 +156,13 @@ def remove_chat_from_db(user_id, chat_id):
         return False
 
 
-# ===== КЛАВИАТУРЫ (сокращенно) =====
+# ===== КЛАВИАТУРЫ =====
 def get_main_keyboard():
     keyboard = [
         [InlineKeyboardButton("📋 Список чатов", callback_data="list_chats")],
         [InlineKeyboardButton("👁 Отслеживание", callback_data="tracking_menu")],
         [InlineKeyboardButton("👥 Пользователи", callback_data="users_menu")],
-        [InlineKeyboardButton("🚫 Черный список", callback_data="blocked_menu")],
+        [InlineKeyboardButton("🙈 Скрытые", callback_data="hidden_menu")],
         [InlineKeyboardButton("🔄 Обновить чаты", callback_data="refresh_chats")]
     ]
     
@@ -328,10 +252,10 @@ def get_users_keyboard(page=0, per_page=10):
     end_idx = min(start_idx + per_page, len(users))
     
     for user in users[start_idx:end_idx]:
-        user_id, username, first_name, last_name, is_blocked, last_time = user
+        user_id, username, first_name, last_name, last_time = user
         name = first_name or "Без имени"
-        status = "🚫" if is_blocked else "✅"
-        keyboard.append([InlineKeyboardButton(f"{status} {name} (@{username or 'нет'})", callback_data=f"user_{user_id}")])
+        is_hidden = "🙈" if user_id in hidden_users else "👤"
+        keyboard.append([InlineKeyboardButton(f"{is_hidden} {name} (@{username or 'нет'})", callback_data=f"user_{user_id}")])
     
     nav_buttons = []
     if page > 0:
@@ -344,22 +268,22 @@ def get_users_keyboard(page=0, per_page=10):
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="main_menu")])
     return InlineKeyboardMarkup(keyboard)
 
-def get_blocked_keyboard(page=0, per_page=10):
-    users = get_blocked_users()
+def get_hidden_keyboard(page=0, per_page=10):
+    hidden = [u for u in get_all_users() if u[0] in hidden_users]
     keyboard = []
     start_idx = page * per_page
-    end_idx = min(start_idx + per_page, len(users))
+    end_idx = min(start_idx + per_page, len(hidden))
     
-    for user in users[start_idx:end_idx]:
+    for user in hidden[start_idx:end_idx]:
         user_id, username, first_name, last_name, last_time = user
         name = first_name or "Без имени"
-        keyboard.append([InlineKeyboardButton(f"🚫 {name} (@{username or 'нет'})", callback_data=f"user_{user_id}")])
+        keyboard.append([InlineKeyboardButton(f"🙈 {name} (@{username or 'нет'})", callback_data=f"user_{user_id}")])
     
     nav_buttons = []
     if page > 0:
-        nav_buttons.append(InlineKeyboardButton("◀️", callback_data=f"blocked_page_{page-1}"))
-    if end_idx < len(users):
-        nav_buttons.append(InlineKeyboardButton("▶️", callback_data=f"blocked_page_{page+1}"))
+        nav_buttons.append(InlineKeyboardButton("◀️", callback_data=f"hidden_page_{page-1}"))
+    if end_idx < len(hidden):
+        nav_buttons.append(InlineKeyboardButton("▶️", callback_data=f"hidden_page_{page+1}"))
     if nav_buttons:
         keyboard.append(nav_buttons)
     
@@ -371,20 +295,21 @@ def get_user_actions_keyboard(user_id):
     if not user:
         return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="users_menu")]])
     
-    is_blocked = user[4]
+    is_hidden = user_id in hidden_users
     keyboard = []
-    if is_blocked:
-        keyboard.append([InlineKeyboardButton("✅ Разблокировать", callback_data=f"unblock_user_{user_id}")])
+    if is_hidden:
+        keyboard.append([InlineKeyboardButton("👁 Показать", callback_data=f"unhide_user_{user_id}")])
     else:
-        keyboard.append([InlineKeyboardButton("🚫 Заблокировать", callback_data=f"block_user_{user_id}")])
+        keyboard.append([InlineKeyboardButton("🙈 Скрыть", callback_data=f"hide_user_{user_id}")])
+    
     keyboard.append([InlineKeyboardButton("📤 Ответить", callback_data=f"reply_user_{user_id}")])
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="users_menu")])
     return InlineKeyboardMarkup(keyboard)
 
 
-# ===== КОМАНДЫ БЛОКИРОВКИ =====
-async def block_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /block [user_id] - блокирует пользователя"""
+# ===== КОМАНДЫ СКРЫТИЯ =====
+async def hide_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /hide [user_id] - скрывает пользователя"""
     user_id = update.effective_user.id
     
     if user_id != YOUR_USER_ID:
@@ -393,8 +318,8 @@ async def block_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text(
             "❌ <b>Использование:</b>\n"
-            "<code>/block [user_id]</code>\n\n"
-            "Пример: <code>/block 123456789</code>",
+            "<code>/hide [user_id]</code>\n\n"
+            "Пример: <code>/hide 123456789</code>",
             parse_mode='HTML'
         )
         return
@@ -406,22 +331,23 @@ async def block_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if target_id == YOUR_USER_ID:
-        await update.message.reply_text("❌ Нельзя заблокировать себя!")
+        await update.message.reply_text("❌ Нельзя скрыть себя!")
         return
     
-    if block_user(target_id):
+    if target_id not in hidden_users:
+        hidden_users.append(target_id)
+        logger.info(f"🙈 Пользователь {target_id} СКРЫТ")
         await update.message.reply_text(
-            f"✅ <b>Пользователь ЗАБЛОКИРОВАН</b>\n\n"
+            f"🙈 <b>Пользователь СКРЫТ</b>\n\n"
             f"🆔 ID: <code>{target_id}</code>\n"
-            f"Теперь его сообщения игнорируются.",
+            f"Его сообщения не будут пересылаться.",
             parse_mode='HTML'
         )
-        logger.info(f"✅ Блокировка через команду: {target_id}")
     else:
-        await update.message.reply_text("❌ Ошибка блокировки")
+        await update.message.reply_text(f"⚠️ Пользователь уже скрыт")
 
-async def unblock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /unblock [user_id] - разблокирует пользователя"""
+async def unhide_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /unhide [user_id] - показывает пользователя"""
     user_id = update.effective_user.id
     
     if user_id != YOUR_USER_ID:
@@ -430,8 +356,8 @@ async def unblock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text(
             "❌ <b>Использование:</b>\n"
-            "<code>/unblock [user_id]</code>\n\n"
-            "Пример: <code>/unblock 123456789</code>",
+            "<code>/unhide [user_id]</code>\n\n"
+            "Пример: <code>/unhide 123456789</code>",
             parse_mode='HTML'
         )
         return
@@ -442,33 +368,38 @@ async def unblock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ ID должен быть числом!")
         return
     
-    if unblock_user(target_id):
+    if target_id in hidden_users:
+        hidden_users.remove(target_id)
+        logger.info(f"👁 Пользователь {target_id} ПОКАЗАН")
         await update.message.reply_text(
-            f"✅ <b>Пользователь РАЗБЛОКИРОВАН</b>\n\n"
-            f"🆔 ID: <code>{target_id}</code>",
+            f"👁 <b>Пользователь ПОКАЗАН</b>\n\n"
+            f"🆔 ID: <code>{target_id}</code>\n"
+            f"Теперь его сообщения будут пересылаться.",
             parse_mode='HTML'
         )
-        logger.info(f"✅ Разблокировка через команду: {target_id}")
     else:
-        await update.message.reply_text("❌ Ошибка разблокировки")
+        await update.message.reply_text(f"⚠️ Пользователь не был скрыт")
 
-async def blocked_list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /blocked - показывает список заблокированных"""
+async def hidden_list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /hidden - показывает список скрытых пользователей"""
     user_id = update.effective_user.id
     
     if user_id != YOUR_USER_ID:
         return
     
-    blocked = get_blocked_users()
-    if not blocked:
-        await update.message.reply_text("🚫 <b>Черный список пуст</b>", parse_mode='HTML')
+    if not hidden_users:
+        await update.message.reply_text("🙈 <b>Скрытых пользователей нет</b>", parse_mode='HTML')
         return
     
-    text = "🚫 <b>Заблокированные пользователи:</b>\n\n"
-    for user in blocked:
-        user_id, username, first_name, last_name, last_time = user
-        name = first_name or "Без имени"
-        text += f"🆔 <code>{user_id}</code> - {name} (@{username or 'нет'})\n"
+    text = "🙈 <b>Скрытые пользователи:</b>\n\n"
+    for uid in hidden_users:
+        user = get_user(uid)
+        if user:
+            user_id, username, first_name, last_name = user
+            name = first_name or "Без имени"
+            text += f"🆔 <code>{user_id}</code> - {name} (@{username or 'нет'})\n"
+        else:
+            text += f"🆔 <code>{uid}</code> - (неизвестный)\n"
     
     await update.message.reply_text(text, parse_mode='HTML')
 
@@ -488,9 +419,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         add_user_to_db(user_id, user.username, user.first_name, user.last_name)
         
-        # ===== ПРОВЕРКА БЛОКИРОВКИ =====
-        if is_user_blocked(user_id):
-            logger.info(f"🔒 ЗАБЛОКИРОВАННЫЙ {user_id} - ИГНОР")
+        # ===== ПРОВЕРКА НА СКРЫТИЕ =====
+        if user_id in hidden_users:
+            logger.info(f"🙈 СКРЫТЫЙ {user_id} - ИГНОР")
             return
         
         # Отправляем уведомление владельцу
@@ -502,11 +433,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                      f"📛 Имя: {user.first_name or 'Нет'}\n"
                      f"🔗 Юзернейм: @{user.username or 'Нет'}\n"
                      f"🕐 Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-                     f"<i>Чтобы заблокировать: /block {user_id}</i>",
+                     f"<i>Чтобы скрыть: /hide {user_id}</i>",
                 parse_mode='HTML',
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("📤 Ответить", callback_data=f"reply_user_{user_id}")],
-                    [InlineKeyboardButton("🚫 Заблокировать", callback_data=f"block_user_{user_id}")]
+                    [InlineKeyboardButton("🙈 Скрыть", callback_data=f"hide_user_{user_id}")]
                 ])
             )
         except Exception as e:
@@ -517,9 +448,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 <b>Главное меню</b>\n\n"
         "Команды:\n"
-        "/block [id] - заблокировать пользователя\n"
-        "/unblock [id] - разблокировать\n"
-        "/blocked - список заблокированных",
+        "/hide [id] - скрыть пользователя\n"
+        "/unhide [id] - показать пользователя\n"
+        "/hidden - список скрытых",
         parse_mode='HTML',
         reply_markup=get_main_keyboard()
     )
@@ -569,7 +500,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         await query.edit_message_text(
-            f"👥 <b>Пользователи</b> ({len(users)})",
+            f"👥 <b>Пользователи</b> ({len(users)})\n\n👤 - активен\n🙈 - скрыт",
             parse_mode='HTML',
             reply_markup=get_users_keyboard()
         )
@@ -584,28 +515,28 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    if data == "blocked_menu":
-        blocked = get_blocked_users()
-        if not blocked:
+    # === СКРЫТЫЕ ===
+    if data == "hidden_menu":
+        if not hidden_users:
             await query.edit_message_text(
-                "🚫 <b>Черный список пуст</b>",
+                "🙈 <b>Скрытых пользователей нет</b>",
                 parse_mode='HTML',
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]])
             )
             return
         await query.edit_message_text(
-            f"🚫 <b>Черный список</b> ({len(blocked)})",
+            f"🙈 <b>Скрытые пользователи</b> ({len(hidden_users)})",
             parse_mode='HTML',
-            reply_markup=get_blocked_keyboard()
+            reply_markup=get_hidden_keyboard()
         )
         return
     
-    if data.startswith("blocked_page_"):
+    if data.startswith("hidden_page_"):
         page = int(data.split("_")[2])
         await query.edit_message_text(
-            "🚫 <b>Черный список</b>",
+            "🙈 <b>Скрытые пользователи</b>",
             parse_mode='HTML',
-            reply_markup=get_blocked_keyboard(page)
+            reply_markup=get_hidden_keyboard(page)
         )
         return
     
@@ -616,44 +547,43 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("❌ Пользователь не найден", reply_markup=get_main_keyboard())
             return
         
-        user_id, username, first_name, last_name, is_blocked = user
-        text = f"👤 <b>Информация</b>\n\n🆔 ID: <code>{user_id}</code>\n📛 {first_name or 'Нет'}\n🔗 @{username or 'Нет'}\n📊 {'🚫 ЗАБЛОКИРОВАН' if is_blocked else '✅ Активен'}"
+        user_id, username, first_name, last_name = user
+        is_hidden = user_id in hidden_users
+        text = f"👤 <b>Информация</b>\n\n🆔 ID: <code>{user_id}</code>\n📛 {first_name or 'Нет'}\n🔗 @{username or 'Нет'}\n📊 {'🙈 СКРЫТ' if is_hidden else '👤 Активен'}"
         await query.edit_message_text(text, parse_mode='HTML', reply_markup=get_user_actions_keyboard(user_id))
         return
     
-    # === БЛОКИРОВКА ===
-    if data.startswith("block_user_"):
+    # === СКРЫТИЕ ===
+    if data.startswith("hide_user_"):
         user_id = int(data.split("_")[2])
-        if block_user(user_id):
-            if user_id in user_states:
-                del user_states[user_id]
-            await query.edit_message_text(
-                f"🚫 <b>Пользователь ЗАБЛОКИРОВАН</b>\n\nID: <code>{user_id}</code>",
-                parse_mode='HTML',
-                reply_markup=get_main_keyboard()
-            )
-        else:
-            await query.edit_message_text("❌ Ошибка", reply_markup=get_main_keyboard())
+        if user_id not in hidden_users:
+            hidden_users.append(user_id)
+            logger.info(f"🙈 Скрыт через кнопку: {user_id}")
+        await query.edit_message_text(
+            f"🙈 <b>Пользователь СКРЫТ</b>\n\nID: <code>{user_id}</code>",
+            parse_mode='HTML',
+            reply_markup=get_main_keyboard()
+        )
         return
     
-    if data.startswith("unblock_user_"):
+    if data.startswith("unhide_user_"):
         user_id = int(data.split("_")[2])
-        if unblock_user(user_id):
-            await query.edit_message_text(
-                f"✅ <b>Пользователь РАЗБЛОКИРОВАН</b>\n\nID: <code>{user_id}</code>",
-                parse_mode='HTML',
-                reply_markup=get_main_keyboard()
-            )
-        else:
-            await query.edit_message_text("❌ Ошибка", reply_markup=get_main_keyboard())
+        if user_id in hidden_users:
+            hidden_users.remove(user_id)
+            logger.info(f"👁 Показан через кнопку: {user_id}")
+        await query.edit_message_text(
+            f"👁 <b>Пользователь ПОКАЗАН</b>\n\nID: <code>{user_id}</code>",
+            parse_mode='HTML',
+            reply_markup=get_main_keyboard()
+        )
         return
     
     # === ОТВЕТ ПОЛЬЗОВАТЕЛЮ ===
     if data.startswith("reply_user_"):
         user_id = int(data.split("_")[2])
-        if is_user_blocked(user_id):
+        if user_id in hidden_users:
             await query.edit_message_text(
-                f"🚫 <b>Пользователь ЗАБЛОКИРОВАН</b>\n\nID: <code>{user_id}</code>",
+                f"🙈 <b>Пользователь СКРЫТ</b>\n\nID: <code>{user_id}</code>",
                 parse_mode='HTML',
                 reply_markup=get_main_keyboard()
             )
@@ -852,7 +782,7 @@ async def send_tracking_notification(context, chat, user, message_text, message_
         f"👤 {user_info} (ID: {user_id})\n"
         f"💬 {message_text}\n"
         f"🕐 {time}\n\n"
-        f"<i>Чтобы заблокировать: /block {user_id}</i>"
+        f"<i>Чтобы скрыть: /hide {user_id}</i>"
     )
     
     try:
@@ -935,9 +865,9 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
         user = update.effective_user
         add_user_to_db(user_id, user.username, user.first_name, user.last_name)
         
-        # ===== ГЛАВНАЯ ПРОВЕРКА БЛОКИРОВКИ =====
-        if is_user_blocked(user_id):
-            logger.info(f"🔒 ЗАБЛОКИРОВАННЫЙ {user_id} - ИГНОР")
+        # ===== ПРОВЕРКА НА СКРЫТИЕ =====
+        if user_id in hidden_users:
+            logger.info(f"🙈 СКРЫТЫЙ {user_id} - ИГНОР")
             return  # МОЛЧА ИГНОРИРУЕМ
         
         # Отправляем уведомление владельцу
@@ -980,7 +910,7 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
                 f"🔗 @{user.username or 'Нет'}\n"
                 f"💬 {message_text}\n"
                 f"🕐 {datetime.now().strftime('%H:%M:%S')}\n\n"
-                f"<i>Чтобы заблокировать: /block {user_id}</i>"
+                f"<i>Чтобы скрыть: /hide {user_id}</i>"
             )
             
             if file_type == "photo":
@@ -991,7 +921,7 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
                     parse_mode='HTML',
                     reply_markup=InlineKeyboardMarkup([
                         [InlineKeyboardButton("📤 Ответить", callback_data=f"reply_user_{user_id}")],
-                        [InlineKeyboardButton("🚫 Заблокировать", callback_data=f"block_user_{user_id}")]
+                        [InlineKeyboardButton("🙈 Скрыть", callback_data=f"hide_user_{user_id}")]
                     ])
                 )
             elif file_type == "sticker":
@@ -1002,7 +932,7 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
                     parse_mode='HTML',
                     reply_markup=InlineKeyboardMarkup([
                         [InlineKeyboardButton("📤 Ответить", callback_data=f"reply_user_{user_id}")],
-                        [InlineKeyboardButton("🚫 Заблокировать", callback_data=f"block_user_{user_id}")]
+                        [InlineKeyboardButton("🙈 Скрыть", callback_data=f"hide_user_{user_id}")]
                     ])
                 )
             elif file_type in ["video", "document", "audio", "voice"]:
@@ -1014,7 +944,7 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
                         parse_mode='HTML',
                         reply_markup=InlineKeyboardMarkup([
                             [InlineKeyboardButton("📤 Ответить", callback_data=f"reply_user_{user_id}")],
-                            [InlineKeyboardButton("🚫 Заблокировать", callback_data=f"block_user_{user_id}")]
+                            [InlineKeyboardButton("🙈 Скрыть", callback_data=f"hide_user_{user_id}")]
                         ])
                     )
                 elif file_type == "document":
@@ -1025,7 +955,7 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
                         parse_mode='HTML',
                         reply_markup=InlineKeyboardMarkup([
                             [InlineKeyboardButton("📤 Ответить", callback_data=f"reply_user_{user_id}")],
-                            [InlineKeyboardButton("🚫 Заблокировать", callback_data=f"block_user_{user_id}")]
+                            [InlineKeyboardButton("🙈 Скрыть", callback_data=f"hide_user_{user_id}")]
                         ])
                     )
                 elif file_type == "audio":
@@ -1036,7 +966,7 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
                         parse_mode='HTML',
                         reply_markup=InlineKeyboardMarkup([
                             [InlineKeyboardButton("📤 Ответить", callback_data=f"reply_user_{user_id}")],
-                            [InlineKeyboardButton("🚫 Заблокировать", callback_data=f"block_user_{user_id}")]
+                            [InlineKeyboardButton("🙈 Скрыть", callback_data=f"hide_user_{user_id}")]
                         ])
                     )
                 elif file_type == "voice":
@@ -1047,7 +977,7 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
                         parse_mode='HTML',
                         reply_markup=InlineKeyboardMarkup([
                             [InlineKeyboardButton("📤 Ответить", callback_data=f"reply_user_{user_id}")],
-                            [InlineKeyboardButton("🚫 Заблокировать", callback_data=f"block_user_{user_id}")]
+                            [InlineKeyboardButton("🙈 Скрыть", callback_data=f"hide_user_{user_id}")]
                         ])
                     )
             else:
@@ -1057,7 +987,7 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
                     parse_mode='HTML',
                     reply_markup=InlineKeyboardMarkup([
                         [InlineKeyboardButton("📤 Ответить", callback_data=f"reply_user_{user_id}")],
-                        [InlineKeyboardButton("🚫 Заблокировать", callback_data=f"block_user_{user_id}")]
+                        [InlineKeyboardButton("🙈 Скрыть", callback_data=f"hide_user_{user_id}")]
                     ])
                 )
         except Exception as e:
@@ -1139,14 +1069,14 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
             state = user_states[user_id]
             action = state['action']
             
-            # Проверка блокировки для ответа пользователю
+            # Проверка скрытия для ответа пользователю
             if action == 'reply_to_user':
                 target_user_id = state['user_id']
-                if is_user_blocked(target_user_id):
+                if target_user_id in hidden_users:
                     await update.message.reply_text(
-                        f"🚫 <b>Пользователь ЗАБЛОКИРОВАН</b>\n\n"
+                        f"🙈 <b>Пользователь СКРЫТ</b>\n\n"
                         f"ID: <code>{target_user_id}</code>\n"
-                        f"Используйте /unblock {target_user_id} для разблокировки",
+                        f"Используйте /unhide {target_user_id} чтобы показать",
                         parse_mode='HTML',
                         reply_markup=get_main_keyboard()
                     )
@@ -1265,9 +1195,9 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text(
                 "👋 <b>Главное меню</b>\n\n"
                 "Команды:\n"
-                "/block [id] - заблокировать пользователя\n"
-                "/unblock [id] - разблокировать\n"
-                "/blocked - список заблокированных",
+                "/hide [id] - скрыть пользователя\n"
+                "/unhide [id] - показать пользователя\n"
+                "/hidden - список скрытых",
                 parse_mode='HTML',
                 reply_markup=get_main_keyboard()
             )
@@ -1308,9 +1238,9 @@ def main():
         
         # Команды
         application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("block", block_command))
-        application.add_handler(CommandHandler("unblock", unblock_command))
-        application.add_handler(CommandHandler("blocked", blocked_list_command))
+        application.add_handler(CommandHandler("hide", hide_command))
+        application.add_handler(CommandHandler("unhide", unhide_command))
+        application.add_handler(CommandHandler("hidden", hidden_list_command))
         
         # Callback
         application.add_handler(CallbackQueryHandler(handle_callback))
@@ -1322,11 +1252,14 @@ def main():
         print("✅ Бот запущен!")
         print("=" * 50)
         print("📌 КОМАНДЫ:")
-        print("  /block [id] - заблокировать пользователя")
-        print("  /unblock [id] - разблокировать")
-        print("  /blocked - список заблокированных")
+        print("  /hide [id] - скрыть пользователя")
+        print("  /unhide [id] - показать пользователя")
+        print("  /hidden - список скрытых")
         print("=" * 50)
-        print("📌 Логирование включено (смотрите bot.log)")
+        print("📌 ФУНКЦИИ:")
+        print("  ✅ Отслеживание ВСЕХ сообщений")
+        print("  ✅ Скрытие работает 100% (в памяти)")
+        print("  ✅ Кнопка ответа под каждым")
         print("=" * 50)
         
         application.run_polling(drop_pending_updates=True)
