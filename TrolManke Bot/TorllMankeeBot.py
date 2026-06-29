@@ -62,6 +62,21 @@ def init_db():
     except Exception as e:
         logger.error(f"Ошибка инициализации БД: {e}")
 
+def chat_exists(user_id, chat_id):
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute(
+            'SELECT 1 FROM user_chats WHERE user_id = ? AND chat_id = ?',
+            (user_id, chat_id)
+        )
+        exists = cursor.fetchone() is not None
+        conn.close()
+        return exists
+    except Exception as e:
+        logger.error(f"Ошибка проверки чата: {e}")
+        return False
+
 def add_chat_to_db(user_id, chat_id, chat_title, chat_type):
     try:
         conn = sqlite3.connect(DB_NAME)
@@ -131,6 +146,21 @@ def get_user(user_id):
     except Exception as e:
         logger.error(f"Ошибка получения пользователя: {e}")
         return None
+
+def is_user_blocked(user_id):
+    """Быстрая проверка на блокировку"""
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute('SELECT is_blocked FROM users WHERE user_id = ?', (user_id,))
+        result = cursor.fetchone()
+        conn.close()
+        if result:
+            return result[0] == 1
+        return False
+    except Exception as e:
+        logger.error(f"Ошибка проверки блокировки: {e}")
+        return False
 
 def block_user(user_id):
     try:
@@ -230,6 +260,9 @@ def get_main_keyboard():
         keyboard.insert(0, [InlineKeyboardButton(f"⚡ {chat_title}", callback_data=f"quick_send_{chat_id}")])
     
     return InlineKeyboardMarkup(keyboard)
+
+def get_back_keyboard():
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад в меню", callback_data="exit_mode")]])
 
 def get_quick_send_keyboard(chat_id):
     keyboard = [
@@ -416,9 +449,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         add_user_to_db(user_id, user.username, user.first_name, user.last_name)
         
-        user_data = get_user(user_id)
-        if user_data and user_data[4] == 1:
-            logger.info(f"Заблокированный пользователь {user_id} написал боту")
+        # ПРОВЕРКА НА БЛОКИРОВКУ
+        if is_user_blocked(user_id):
+            logger.info(f"Заблокированный пользователь {user_id} написал боту - ИГНОРИРУЕМ")
             return
         
         try:
@@ -460,7 +493,23 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     data = query.data
     
+    # ===== ВЫХОД ИЗ РЕЖИМА =====
+    if data == "exit_mode":
+        if user_id in user_states:
+            del user_states[user_id]
+            logger.info(f"Режим отправки отключен для {user_id}")
+        await query.edit_message_text(
+            "✅ <b>Режим отправки отключен</b>\n\n"
+            "Вы вернулись в главное меню",
+            parse_mode='HTML',
+            reply_markup=get_main_keyboard()
+        )
+        return
+    
     if data == "main_menu":
+        if user_id in user_states:
+            del user_states[user_id]
+            logger.info(f"Режим отправки отключен для {user_id}")
         await query.edit_message_text(
             "👋 <b>Главное меню</b>\n\nВыберите действие:",
             parse_mode='HTML',
@@ -541,6 +590,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("block_user_"):
         user_id = int(data.split("_")[2])
         if block_user(user_id):
+            # Удаляем состояние если было
+            if user_id in user_states:
+                del user_states[user_id]
             await query.edit_message_text(
                 f"🚫 <b>Пользователь заблокирован</b>\n\nID: <code>{user_id}</code>",
                 parse_mode='HTML',
@@ -562,15 +614,25 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     elif data.startswith("reply_user_"):
         user_id = int(data.split("_")[2])
+        # Проверяем не заблокирован ли пользователь
+        if is_user_blocked(user_id):
+            await query.edit_message_text(
+                f"🚫 <b>Пользователь заблокирован</b>\n\nID: <code>{user_id}</code>\n"
+                "Сначала разблокируйте его",
+                parse_mode='HTML',
+                reply_markup=get_main_keyboard()
+            )
+            return
+        
         user_states[YOUR_USER_ID] = {'action': 'reply_to_user', 'user_id': user_id}
         await query.edit_message_text(
             f"✏️ <b>Ответ пользователю</b>\n\n"
             f"ID: <code>{user_id}</code>\n\n"
             "Отправьте текст, фото, видео, документ или стикер.\n"
             "Бот автоматически определит тип.\n\n"
-            "Нажмите 🔙 Назад чтобы выйти",
+            "Нажмите 🔙 Назад в меню чтобы выйти",
             parse_mode='HTML',
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]])
+            reply_markup=get_back_keyboard()
         )
     
     elif data == "tracking_menu":
@@ -608,9 +670,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Чат: <code>{chat_id}</code>\n\n"
             "Теперь можете писать текст.\n"
             "Сообщения будут уходить в этот чат.\n\n"
-            "Нажмите 🔙 Назад чтобы выйти",
+            "Нажмите 🔙 Назад в меню чтобы выйти",
             parse_mode='HTML',
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]])
+            reply_markup=get_back_keyboard()
         )
     
     elif data.startswith("quick_media_"):
@@ -629,9 +691,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"{emoji} <b>Режим отправки {media_type}</b>\n\n"
             f"Чат: <code>{chat_id}</code>\n\n"
             f"Отправьте {media_type}.\n\n"
-            "Нажмите 🔙 Назад чтобы выйти",
+            "Нажмите 🔙 Назад в меню чтобы выйти",
             parse_mode='HTML',
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]])
+            reply_markup=get_back_keyboard()
         )
     
     elif data == "list_chats":
@@ -703,9 +765,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Теперь можете отправлять ЛЮБЫЕ сообщения:\n"
             "✅ Текст\n✅ Фото\n✅ Видео\n✅ Документ\n✅ Стикер\n\n"
             "Бот сам определит тип.\n\n"
-            "Нажмите 🔙 Назад чтобы выйти",
+            "Нажмите 🔙 Назад в меню чтобы выйти",
             parse_mode='HTML',
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]])
+            reply_markup=get_back_keyboard()
         )
     
     elif data.startswith("reply_in_chat_"):
@@ -753,9 +815,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Чат: <code>{chat_id}</code>\n"
             f"Сообщение ID: <code>{message_id}</code>\n\n"
             "Отправьте текст, фото, видео, документ или стикер\n\n"
-            "Нажмите 🔙 Назад чтобы выйти",
+            "Нажмите 🔙 Назад в меню чтобы выйти",
             parse_mode='HTML',
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]])
+            reply_markup=get_back_keyboard()
         )
     
     elif data.startswith("last_messages_"):
@@ -964,10 +1026,9 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
         user = update.effective_user
         add_user_to_db(user_id, user.username, user.first_name, user.last_name)
         
-        # ПРОВЕРКА НА БЛОКИРОВКУ
-        user_data = get_user(user_id)
-        if user_data and user_data[4] == 1:
-            logger.info(f"Заблокированный пользователь {user_id} написал боту - ИГНОРИРУЕМ")
+        # ===== ПРОВЕРКА НА БЛОКИРОВКУ =====
+        if is_user_blocked(user_id):
+            logger.info(f"🔒 Заблокированный пользователь {user_id} написал боту - ИГНОРИРУЕМ")
             return  # МОЛЧА ИГНОРИРУЕМ
         
         message_text = "Медиа"
@@ -1100,13 +1161,17 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
     if chat_type in ["group", "supergroup"]:
         chat_title = chat.title or "Без названия"
         
+        # Добавляем чат если его нет
         if user_id == YOUR_USER_ID:
-            if add_chat_to_db(YOUR_USER_ID, chat_id, chat_title, chat_type):
-                await context.bot.send_message(
-                    chat_id=YOUR_USER_ID,
-                    text=f"✅ Чат добавлен: {chat_title}\nID: <code>{chat_id}</code>",
-                    parse_mode='HTML'
-                )
+            if not chat_exists(YOUR_USER_ID, chat_id):
+                if add_chat_to_db(YOUR_USER_ID, chat_id, chat_title, chat_type):
+                    await context.bot.send_message(
+                        chat_id=YOUR_USER_ID,
+                        text=f"✅ Чат добавлен: {chat_title}\nID: <code>{chat_id}</code>",
+                        parse_mode='HTML'
+                    )
+            else:
+                add_chat_to_db(YOUR_USER_ID, chat_id, chat_title, chat_type)
         
         # ===== ОТСЛЕЖИВАНИЕ =====
         if chat_id in tracked_chats:
@@ -1153,6 +1218,7 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
                 else:
                     message_text = "📎 Другое сообщение"
                 
+                # Отправляем уведомление (ВСЕ сообщения, и обычные, и ответы)
                 await send_tracking_notification(
                     context, chat, user, message_text, 
                     file_id, file_type, is_reply_to_bot
@@ -1167,18 +1233,30 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
             state = user_states[user_id]
             action = state['action']
             
-            # Отправка текста
+            # Проверяем для reply_to_user - не заблокирован ли пользователь
+            if action == 'reply_to_user':
+                target_user_id = state['user_id']
+                if is_user_blocked(target_user_id):
+                    await update.message.reply_text(
+                        f"🚫 <b>Пользователь заблокирован</b>\n\n"
+                        f"ID: <code>{target_user_id}</code>\n"
+                        "Сначала разблокируйте его в меню",
+                        parse_mode='HTML',
+                        reply_markup=get_main_keyboard()
+                    )
+                    if user_id in user_states:
+                        del user_states[user_id]
+                    return
+            
             if action == 'send_message' and update.message and update.message.text:
                 chat_id = state['chat_id']
                 try:
                     await context.bot.send_message(chat_id=chat_id, text=update.message.text)
-                    await update.message.reply_text(f"✅ Отправлено")
-                    # НЕ удаляем состояние, чтобы можно было продолжать писать
+                    await update.message.reply_text(f"✅ Отправлено", reply_markup=get_back_keyboard())
                 except Exception as e:
                     await update.message.reply_text(f"❌ Ошибка: {e}")
                 return
             
-            # Отправка любого медиа
             elif action == 'send_any' and update.message:
                 chat_id = state['chat_id']
                 try:
@@ -1223,13 +1301,11 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
                         await update.message.reply_text("❌ Неподдерживаемый тип")
                         return
                     
-                    await update.message.reply_text("✅ Отправлено")
-                    # НЕ удаляем состояние
+                    await update.message.reply_text("✅ Отправлено", reply_markup=get_back_keyboard())
                 except Exception as e:
                     await update.message.reply_text(f"❌ Ошибка: {e}")
                 return
             
-            # Отправка медиа (конкретный тип)
             elif action == 'send_media' and update.message:
                 chat_id = state['chat_id']
                 media_type = state['media_type']
@@ -1241,36 +1317,34 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
                             photo=update.message.photo[-1].file_id,
                             caption=update.message.caption
                         )
-                        await update.message.reply_text("✅ Фото отправлено")
+                        await update.message.reply_text("✅ Фото отправлено", reply_markup=get_back_keyboard())
                     elif media_type == "video" and update.message.video:
                         await context.bot.send_video(
                             chat_id=chat_id,
                             video=update.message.video.file_id,
                             caption=update.message.caption
                         )
-                        await update.message.reply_text("✅ Видео отправлено")
+                        await update.message.reply_text("✅ Видео отправлено", reply_markup=get_back_keyboard())
                     elif media_type == "document" and update.message.document:
                         await context.bot.send_document(
                             chat_id=chat_id,
                             document=update.message.document.file_id,
                             caption=update.message.caption
                         )
-                        await update.message.reply_text("✅ Документ отправлен")
+                        await update.message.reply_text("✅ Документ отправлен", reply_markup=get_back_keyboard())
                     elif media_type == "sticker" and update.message.sticker:
                         await context.bot.send_sticker(
                             chat_id=chat_id,
                             sticker=update.message.sticker.file_id
                         )
-                        await update.message.reply_text("✅ Стикер отправлен")
+                        await update.message.reply_text("✅ Стикер отправлен", reply_markup=get_back_keyboard())
                     else:
                         await update.message.reply_text(f"❌ Отправьте {media_type}")
                         return
-                    # НЕ удаляем состояние
                 except Exception as e:
                     await update.message.reply_text(f"❌ Ошибка: {e}")
                 return
             
-            # Ответ пользователю
             elif action == 'reply_to_user' and update.message:
                 target_user_id = state['user_id']
                 try:
@@ -1315,13 +1389,11 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
                         await update.message.reply_text("❌ Неподдерживаемый тип")
                         return
                     
-                    await update.message.reply_text("✅ Отправлено пользователю")
-                    # НЕ удаляем состояние
+                    await update.message.reply_text("✅ Отправлено пользователю", reply_markup=get_back_keyboard())
                 except Exception as e:
                     await update.message.reply_text(f"❌ Ошибка: {e}")
                 return
             
-            # Ответ на сообщение в чате
             elif action == 'reply_in_chat' and update.message:
                 chat_id = state['chat_id']
                 message_id = state['message_id']
@@ -1364,8 +1436,7 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
                         await update.message.reply_text("❌ Неподдерживаемый тип")
                         return
                     
-                    await update.message.reply_text("✅ Ответ отправлен")
-                    # НЕ удаляем состояние
+                    await update.message.reply_text("✅ Ответ отправлен", reply_markup=get_back_keyboard())
                 except Exception as e:
                     await update.message.reply_text(f"❌ Ошибка: {e}")
                 return
@@ -1394,8 +1465,9 @@ async def refresh_all_chats(query, context):
                 if update.message and update.message.chat:
                     chat = update.message.chat
                     if chat.type in ["group", "supergroup"]:
-                        if add_chat_to_db(YOUR_USER_ID, chat.id, chat.title, chat.type):
-                            added += 1
+                        if not chat_exists(YOUR_USER_ID, chat.id):
+                            if add_chat_to_db(YOUR_USER_ID, chat.id, chat.title, chat.type):
+                                added += 1
             if added > 0:
                 logger.info(f"Добавлено {added} новых чатов")
         except Exception as e:
@@ -1447,12 +1519,13 @@ def main():
         print("=" * 50)
         print("📌 ФУНКЦИИ:")
         print("  ⭐ Закрепление нескольких чатов")
-        print("  👁 Отслеживание с пометками")
+        print("  👁 Отслеживание с пометками (ВСЕ сообщения)")
         print("  👥 Личный чат с пользователями")
         print("  📝 Ответ на сообщение с цитатой")
         print("  🎨 Отправка стикеров")
         print("  🚫 Блокировка пользователей (РАБОТАЕТ)")
         print("  📤 Отправка любых медиа (без выхода из режима)")
+        print("  🔙 Кнопка Назад в каждом режиме")
         print("  🗑 Автоочистка (только незаблокированных)")
         print("=" * 50)
         print("🔄 Ожидание сообщений...")
