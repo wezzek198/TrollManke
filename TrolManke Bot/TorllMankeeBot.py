@@ -15,7 +15,7 @@ DB_NAME = "chat_bot.db"
 # Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO,
+    level=logging.DEBUG,  # Меняем на DEBUG для детального лога
     handlers=[
         logging.FileHandler("bot.log"),
         logging.StreamHandler(sys.stdout)
@@ -52,42 +52,66 @@ def init_db():
                 username TEXT,
                 first_name TEXT,
                 last_name TEXT,
-                is_blocked BOOLEAN DEFAULT 0,
+                is_blocked INTEGER DEFAULT 0,
                 last_message_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         
         conn.commit()
         conn.close()
-        logger.info("Базы данных инициализированы")
+        logger.info("✅ Базы данных инициализированы")
         return True
     except Exception as e:
-        logger.error(f"Ошибка инициализации БД: {e}")
+        logger.error(f"❌ Ошибка инициализации БД: {e}")
         return False
 
 def is_user_blocked(user_id):
+    """Проверка блокировки с логированием"""
     try:
         conn = sqlite3.connect(DB_NAME)
         cursor = conn.cursor()
         cursor.execute('SELECT is_blocked FROM users WHERE user_id = ?', (user_id,))
         result = cursor.fetchone()
         conn.close()
-        return result is not None and result[0] == 1
+        
+        if result:
+            blocked = result[0] == 1
+            logger.info(f"🔍 Проверка блокировки {user_id}: {'ЗАБЛОКИРОВАН' if blocked else 'НЕ ЗАБЛОКИРОВАН'}")
+            return blocked
+        logger.info(f"🔍 Пользователь {user_id} не найден в БД")
+        return False
     except Exception as e:
-        logger.error(f"Ошибка проверки блокировки: {e}")
+        logger.error(f"❌ Ошибка проверки блокировки: {e}")
         return False
 
 def block_user(user_id):
     try:
         conn = sqlite3.connect(DB_NAME)
         cursor = conn.cursor()
-        cursor.execute('UPDATE users SET is_blocked = 1 WHERE user_id = ?', (user_id,))
+        
+        # Сначала проверяем есть ли пользователь
+        cursor.execute('SELECT user_id FROM users WHERE user_id = ?', (user_id,))
+        exists = cursor.fetchone()
+        
+        if exists:
+            cursor.execute('UPDATE users SET is_blocked = 1 WHERE user_id = ?', (user_id,))
+        else:
+            cursor.execute('INSERT INTO users (user_id, is_blocked) VALUES (?, 1)', (user_id,))
+        
         conn.commit()
         conn.close()
+        
         logger.info(f"✅ Пользователь {user_id} ЗАБЛОКИРОВАН")
-        return True
+        
+        # Проверяем что блокировка применилась
+        if is_user_blocked(user_id):
+            logger.info(f"✅ Блокировка {user_id} ПОДТВЕРЖДЕНА")
+            return True
+        else:
+            logger.error(f"❌ Блокировка {user_id} НЕ ПОДТВЕРДИЛАСЬ")
+            return False
     except Exception as e:
-        logger.error(f"Ошибка блокировки: {e}")
+        logger.error(f"❌ Ошибка блокировки: {e}")
         return False
 
 def unblock_user(user_id):
@@ -100,7 +124,7 @@ def unblock_user(user_id):
         logger.info(f"✅ Пользователь {user_id} РАЗБЛОКИРОВАН")
         return True
     except Exception as e:
-        logger.error(f"Ошибка разблокировки: {e}")
+        logger.error(f"❌ Ошибка разблокировки: {e}")
         return False
 
 def add_user_to_db(user_id, username, first_name, last_name):
@@ -115,7 +139,7 @@ def add_user_to_db(user_id, username, first_name, last_name):
         conn.close()
         return True
     except Exception as e:
-        logger.error(f"Ошибка добавления пользователя: {e}")
+        logger.error(f"❌ Ошибка добавления пользователя: {e}")
         return False
 
 def get_user(user_id):
@@ -127,7 +151,7 @@ def get_user(user_id):
         conn.close()
         return user
     except Exception as e:
-        logger.error(f"Ошибка получения пользователя: {e}")
+        logger.error(f"❌ Ошибка получения пользователя: {e}")
         return None
 
 def get_all_users():
@@ -137,9 +161,13 @@ def get_all_users():
         cursor.execute('SELECT user_id, username, first_name, last_name, is_blocked, last_message_time FROM users ORDER BY is_blocked DESC, last_message_time DESC')
         users = cursor.fetchall()
         conn.close()
+        
+        # Логируем состояние
+        for u in users:
+            logger.info(f"👤 Пользователь {u[0]}: {'ЗАБЛОКИРОВАН' if u[4] else 'АКТИВЕН'}")
         return users
     except Exception as e:
-        logger.error(f"Ошибка получения пользователей: {e}")
+        logger.error(f"❌ Ошибка получения пользователей: {e}")
         return []
 
 def get_blocked_users():
@@ -151,7 +179,7 @@ def get_blocked_users():
         conn.close()
         return users
     except Exception as e:
-        logger.error(f"Ошибка получения заблокированных: {e}")
+        logger.error(f"❌ Ошибка получения заблокированных: {e}")
         return []
 
 def chat_exists(user_id, chat_id):
@@ -163,7 +191,7 @@ def chat_exists(user_id, chat_id):
         conn.close()
         return exists
     except Exception as e:
-        logger.error(f"Ошибка проверки чата: {e}")
+        logger.error(f"❌ Ошибка проверки чата: {e}")
         return False
 
 def add_chat_to_db(user_id, chat_id, chat_title, chat_type):
@@ -176,7 +204,7 @@ def add_chat_to_db(user_id, chat_id, chat_title, chat_type):
         conn.close()
         return True
     except Exception as e:
-        logger.error(f"Ошибка добавления чата: {e}")
+        logger.error(f"❌ Ошибка добавления чата: {e}")
         return False
 
 def get_user_chats(user_id):
@@ -188,7 +216,7 @@ def get_user_chats(user_id):
         conn.close()
         return chats
     except Exception as e:
-        logger.error(f"Ошибка получения чатов: {e}")
+        logger.error(f"❌ Ошибка получения чатов: {e}")
         return []
 
 def remove_chat_from_db(user_id, chat_id):
@@ -200,11 +228,11 @@ def remove_chat_from_db(user_id, chat_id):
         conn.close()
         return True
     except Exception as e:
-        logger.error(f"Ошибка удаления чата: {e}")
+        logger.error(f"❌ Ошибка удаления чата: {e}")
         return False
 
 
-# ===== КЛАВИАТУРЫ =====
+# ===== КЛАВИАТУРЫ (сокращенно) =====
 def get_main_keyboard():
     keyboard = [
         [InlineKeyboardButton("📋 Список чатов", callback_data="list_chats")],
@@ -366,8 +394,7 @@ async def block_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "❌ <b>Использование:</b>\n"
             "<code>/block [user_id]</code>\n\n"
-            "Пример: <code>/block 123456789</code>\n"
-            "Чтобы узнать ID пользователя, нажмите на его сообщение → Копировать ID",
+            "Пример: <code>/block 123456789</code>",
             parse_mode='HTML'
         )
         return
@@ -389,7 +416,7 @@ async def block_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Теперь его сообщения игнорируются.",
             parse_mode='HTML'
         )
-        logger.info(f"Блокировка через команду: {target_id}")
+        logger.info(f"✅ Блокировка через команду: {target_id}")
     else:
         await update.message.reply_text("❌ Ошибка блокировки")
 
@@ -421,7 +448,7 @@ async def unblock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🆔 ID: <code>{target_id}</code>",
             parse_mode='HTML'
         )
-        logger.info(f"Разблокировка через команду: {target_id}")
+        logger.info(f"✅ Разблокировка через команду: {target_id}")
     else:
         await update.message.reply_text("❌ Ошибка разблокировки")
 
@@ -489,7 +516,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # === ВЛАДЕЛЕЦ ===
     await update.message.reply_text(
         "👋 <b>Главное меню</b>\n\n"
-        "Выберите действие:",
+        "Команды:\n"
+        "/block [id] - заблокировать пользователя\n"
+        "/unblock [id] - разблокировать\n"
+        "/blocked - список заблокированных",
         parse_mode='HTML',
         reply_markup=get_main_keyboard()
     )
@@ -623,14 +653,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = int(data.split("_")[2])
         if is_user_blocked(user_id):
             await query.edit_message_text(
-                f"🚫 <b>Пользователь ЗАБЛОКИРОВАН</b>",
+                f"🚫 <b>Пользователь ЗАБЛОКИРОВАН</b>\n\nID: <code>{user_id}</code>",
                 parse_mode='HTML',
                 reply_markup=get_main_keyboard()
             )
             return
         user_states[YOUR_USER_ID] = {'action': 'reply_to_user', 'user_id': user_id}
         await query.edit_message_text(
-            f"✏️ <b>Ответ пользователю</b>\n\nID: <code>{user_id}</code>\n\nОтправьте что угодно",
+            f"✏️ <b>Ответ пользователю</b>\n\nID: <code>{user_id}</code>",
             parse_mode='HTML',
             reply_markup=get_back_keyboard()
         )
@@ -683,22 +713,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = int(data.split("_")[2])
         if chat_id not in fixed_chats:
             fixed_chats.append(chat_id)
-        await query.edit_message_text(
-            f"⭐ <b>Чат закреплен</b>",
-            parse_mode='HTML',
-            reply_markup=get_main_keyboard()
-        )
+        await query.edit_message_text(f"⭐ <b>Чат закреплен</b>", parse_mode='HTML', reply_markup=get_main_keyboard())
         return
     
     if data.startswith("unfix_chat_"):
         chat_id = int(data.split("_")[2])
         if chat_id in fixed_chats:
             fixed_chats.remove(chat_id)
-        await query.edit_message_text(
-            f"⭐ <b>Чат откреплен</b>",
-            parse_mode='HTML',
-            reply_markup=get_main_keyboard()
-        )
+        await query.edit_message_text(f"⭐ <b>Чат откреплен</b>", parse_mode='HTML', reply_markup=get_main_keyboard())
         return
     
     # === ОТПРАВКА ===
@@ -756,7 +778,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message_id = int(parts[3])
         user_states[YOUR_USER_ID] = {'action': 'reply_in_chat', 'chat_id': chat_id, 'message_id': message_id}
         await query.edit_message_text(
-            f"✏️ <b>Напишите ответ</b>\n\nЧат: <code>{chat_id}</code>\nСообщение ID: <code>{message_id}</code>",
+            f"✏️ <b>Напишите ответ</b>\n\nЧат: <code>{chat_id}</code>",
             parse_mode='HTML',
             reply_markup=get_back_keyboard()
         )
@@ -769,11 +791,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             fixed_chats.remove(chat_id)
         if chat_id in tracked_chats:
             tracked_chats.remove(chat_id)
-        await query.edit_message_text(
-            f"🗑 <b>Чат удален</b>",
-            parse_mode='HTML',
-            reply_markup=get_main_keyboard()
-        )
+        await query.edit_message_text(f"🗑 <b>Чат удален</b>", parse_mode='HTML', reply_markup=get_main_keyboard())
         return
     
     if data == "refresh_chats":
@@ -785,11 +803,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_chats(query, user_id, page):
     chats = get_user_chats(user_id)
     if not chats:
-        await query.edit_message_text(
-            "📭 <b>Нет чатов</b>",
-            parse_mode='HTML',
-            reply_markup=get_main_keyboard()
-        )
+        await query.edit_message_text("📭 <b>Нет чатов</b>", parse_mode='HTML', reply_markup=get_main_keyboard())
         return
     
     total = len(chats)
@@ -1312,10 +1326,7 @@ def main():
         print("  /unblock [id] - разблокировать")
         print("  /blocked - список заблокированных")
         print("=" * 50)
-        print("📌 ФУНКЦИИ:")
-        print("  ✅ Отслеживание ВСЕХ сообщений")
-        print("  ✅ Блокировка РАБОТАЕТ 100%")
-        print("  ✅ Кнопка ответа под каждым")
+        print("📌 Логирование включено (смотрите bot.log)")
         print("=" * 50)
         
         application.run_polling(drop_pending_updates=True)
