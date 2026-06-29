@@ -148,7 +148,7 @@ def get_user(user_id):
         return None
 
 def is_user_blocked(user_id):
-    """Быстрая проверка на блокировку"""
+    """БЫСТРАЯ ПРОВЕРКА НА БЛОКИРОВКУ"""
     try:
         conn = sqlite3.connect(DB_NAME)
         cursor = conn.cursor()
@@ -169,7 +169,7 @@ def block_user(user_id):
         cursor.execute('UPDATE users SET is_blocked = 1 WHERE user_id = ?', (user_id,))
         conn.commit()
         conn.close()
-        logger.info(f"Пользователь {user_id} заблокирован")
+        logger.info(f"Пользователь {user_id} ЗАБЛОКИРОВАН")
         return True
     except Exception as e:
         logger.error(f"Ошибка блокировки пользователя: {e}")
@@ -182,7 +182,7 @@ def unblock_user(user_id):
         cursor.execute('UPDATE users SET is_blocked = 0 WHERE user_id = ?', (user_id,))
         conn.commit()
         conn.close()
-        logger.info(f"Пользователь {user_id} разблокирован")
+        logger.info(f"Пользователь {user_id} РАЗБЛОКИРОВАН")
         return True
     except Exception as e:
         logger.error(f"Ошибка разблокировки пользователя: {e}")
@@ -264,6 +264,12 @@ def get_main_keyboard():
 def get_back_keyboard():
     return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад в меню", callback_data="exit_mode")]])
 
+def get_reply_keyboard(chat_id, message_id):
+    """Клавиатура с кнопкой ответа для пересланного сообщения"""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📝 Ответить", callback_data=f"reply_msg_{chat_id}_{message_id}")]
+    ])
+
 def get_quick_send_keyboard(chat_id):
     keyboard = [
         [InlineKeyboardButton("📝 Текст", callback_data=f"quick_text_{chat_id}")],
@@ -321,7 +327,6 @@ def get_chat_actions_keyboard(chat_id):
         keyboard.append([InlineKeyboardButton("⭐ Закрепить", callback_data=f"fix_chat_{chat_id}")])
     
     keyboard.append([InlineKeyboardButton("📤 Отправить сообщение", callback_data=f"send_to_{chat_id}")])
-    keyboard.append([InlineKeyboardButton("📝 Ответить на сообщение", callback_data=f"reply_in_chat_{chat_id}")])
     keyboard.append([InlineKeyboardButton("📜 Последние сообщения", callback_data=f"last_messages_{chat_id}")])
     keyboard.append([InlineKeyboardButton("🗑 Удалить чат", callback_data=f"delete_{chat_id}")])
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="list_chats")])
@@ -445,14 +450,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bot_info = await context.bot.get_me()
         BOT_USERNAME = bot_info.username
     
+    # ===== ЕСЛИ НЕ ВЛАДЕЛЕЦ =====
     if user_id != YOUR_USER_ID:
         user = update.effective_user
         add_user_to_db(user_id, user.username, user.first_name, user.last_name)
         
         # ПРОВЕРКА НА БЛОКИРОВКУ
         if is_user_blocked(user_id):
-            logger.info(f"Заблокированный пользователь {user_id} написал боту - ИГНОРИРУЕМ")
-            return
+            logger.info(f"🔒 ЗАБЛОКИРОВАННЫЙ пользователь {user_id} написал боту - ИГНОРИРУЕМ")
+            return  # МОЛЧА ИГНОРИРУЕМ
         
         try:
             await context.bot.send_message(
@@ -473,6 +479,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         return
     
+    # ===== ДЛЯ ВЛАДЕЛЬЦА =====
     await update.message.reply_text(
         "👋 <b>Главное меню</b>\n\n"
         "Выберите действие:",
@@ -579,7 +586,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += f"🆔 ID: <code>{user_id}</code>\n"
         text += f"📛 Имя: {first_name or 'Нет'}\n"
         text += f"🔗 Юзернейм: @{username or 'Нет'}\n"
-        text += f"📊 Статус: {'🚫 Заблокирован' if is_blocked else '✅ Активен'}"
+        text += f"📊 Статус: {'🚫 ЗАБЛОКИРОВАН' if is_blocked else '✅ Активен'}"
         
         await query.edit_message_text(
             text,
@@ -594,7 +601,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if user_id in user_states:
                 del user_states[user_id]
             await query.edit_message_text(
-                f"🚫 <b>Пользователь заблокирован</b>\n\nID: <code>{user_id}</code>",
+                f"🚫 <b>Пользователь ЗАБЛОКИРОВАН</b>\n\nID: <code>{user_id}</code>\n"
+                "Теперь он не сможет писать вам",
                 parse_mode='HTML',
                 reply_markup=get_main_keyboard()
             )
@@ -605,7 +613,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = int(data.split("_")[2])
         if unblock_user(user_id):
             await query.edit_message_text(
-                f"✅ <b>Пользователь разблокирован</b>\n\nID: <code>{user_id}</code>",
+                f"✅ <b>Пользователь РАЗБЛОКИРОВАН</b>\n\nID: <code>{user_id}</code>",
                 parse_mode='HTML',
                 reply_markup=get_main_keyboard()
             )
@@ -617,7 +625,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Проверяем не заблокирован ли пользователь
         if is_user_blocked(user_id):
             await query.edit_message_text(
-                f"🚫 <b>Пользователь заблокирован</b>\n\nID: <code>{user_id}</code>\n"
+                f"🚫 <b>Пользователь ЗАБЛОКИРОВАН</b>\n\nID: <code>{user_id}</code>\n"
                 "Сначала разблокируйте его",
                 parse_mode='HTML',
                 reply_markup=get_main_keyboard()
@@ -770,39 +778,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_back_keyboard()
         )
     
-    elif data.startswith("reply_in_chat_"):
-        chat_id = int(data.split("_")[2])
-        try:
-            updates = await context.bot.get_updates(limit=20)
-            messages = []
-            for update in updates:
-                if update.message and update.message.chat.id == chat_id:
-                    msg_text = update.message.text or "Медиа"
-                    user_name = update.message.from_user.first_name or "Unknown"
-                    messages.append((update.message.message_id, msg_text[:50], user_name))
-            
-            if not messages:
-                await query.edit_message_text(
-                    "📭 <b>Нет сообщений</b>\n\n"
-                    "В этом чате пока нет сообщений",
-                    parse_mode='HTML',
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data=f"chat_{chat_id}")]])
-                )
-                return
-            
-            await query.edit_message_text(
-                "📝 <b>Выберите сообщение для ответа</b>\n\n"
-                "Нажмите на сообщение, на которое хотите ответить:",
-                parse_mode='HTML',
-                reply_markup=get_last_messages_keyboard(chat_id, messages)
-            )
-        except Exception as e:
-            logger.error(f"Ошибка получения сообщений: {e}")
-            await query.edit_message_text(
-                f"❌ Ошибка: {e}",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data=f"chat_{chat_id}")]])
-            )
-    
+    # ===== ОТВЕТ НА СООБЩЕНИЕ (из отслеживания) =====
     elif data.startswith("reply_msg_"):
         parts = data.split("_")
         chat_id = int(parts[2])
@@ -934,7 +910,8 @@ async def show_chat_actions(query, user_id, chat_id):
     )
 
 
-async def send_tracking_notification(context, chat, user, message_text, file_id=None, file_type=None, is_reply_to_bot=False):
+async def send_tracking_notification(context, chat, user, message_text, message_id, file_id=None, file_type=None, is_reply_to_bot=False):
+    """Отправляет уведомление с пометкой и кнопкой ответа"""
     username = user.username or "Нет"
     first_name = user.first_name or "Нет"
     user_id = user.id
@@ -961,46 +938,59 @@ async def send_tracking_notification(context, chat, user, message_text, file_id=
                 chat_id=YOUR_USER_ID,
                 photo=file_id,
                 caption=notification[:1024],
-                parse_mode='HTML'
+                parse_mode='HTML',
+                reply_markup=get_reply_keyboard(chat.id, message_id)
             )
         elif file_type == "video":
             await context.bot.send_video(
                 chat_id=YOUR_USER_ID,
                 video=file_id,
                 caption=notification[:1024],
-                parse_mode='HTML'
+                parse_mode='HTML',
+                reply_markup=get_reply_keyboard(chat.id, message_id)
             )
         elif file_type == "document":
             await context.bot.send_document(
                 chat_id=YOUR_USER_ID,
                 document=file_id,
                 caption=notification[:1024],
-                parse_mode='HTML'
+                parse_mode='HTML',
+                reply_markup=get_reply_keyboard(chat.id, message_id)
             )
         elif file_type == "audio":
             await context.bot.send_audio(
                 chat_id=YOUR_USER_ID,
                 audio=file_id,
                 caption=notification[:1024],
-                parse_mode='HTML'
+                parse_mode='HTML',
+                reply_markup=get_reply_keyboard(chat.id, message_id)
             )
         elif file_type == "voice":
             await context.bot.send_voice(
                 chat_id=YOUR_USER_ID,
                 voice=file_id,
                 caption=notification[:1024],
-                parse_mode='HTML'
+                parse_mode='HTML',
+                reply_markup=get_reply_keyboard(chat.id, message_id)
             )
         elif file_type == "sticker":
             await context.bot.send_sticker(
                 chat_id=YOUR_USER_ID,
                 sticker=file_id
             )
+            # Отправляем текст отдельно с кнопкой
+            await context.bot.send_message(
+                chat_id=YOUR_USER_ID,
+                text=notification,
+                parse_mode='HTML',
+                reply_markup=get_reply_keyboard(chat.id, message_id)
+            )
         else:
             await context.bot.send_message(
                 chat_id=YOUR_USER_ID,
                 text=notification,
-                parse_mode='HTML'
+                parse_mode='HTML',
+                reply_markup=get_reply_keyboard(chat.id, message_id)
             )
         logger.info(f"Уведомление отправлено для чата {chat.id}")
     except Exception as e:
@@ -1026,11 +1016,12 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
         user = update.effective_user
         add_user_to_db(user_id, user.username, user.first_name, user.last_name)
         
-        # ===== ПРОВЕРКА НА БЛОКИРОВКУ =====
+        # ===== ПРОВЕРКА НА БЛОКИРОВКУ (САМАЯ ВАЖНАЯ ЧАСТЬ) =====
         if is_user_blocked(user_id):
-            logger.info(f"🔒 Заблокированный пользователь {user_id} написал боту - ИГНОРИРУЕМ")
-            return  # МОЛЧА ИГНОРИРУЕМ
+            logger.info(f"🔒 ЗАБЛОКИРОВАННЫЙ пользователь {user_id} написал боту - ИГНОРИРУЕМ")
+            return  # МОЛЧА ИГНОРИРУЕМ - НИКАКИХ СООБЩЕНИЙ НЕ ОТПРАВЛЯЕМ
         
+        # ===== ЕСЛИ НЕ ЗАБЛОКИРОВАН - ОТПРАВЛЯЕМ УВЕДОМЛЕНИЕ =====
         message_text = "Медиа"
         file_id = None
         file_type = None
@@ -1173,10 +1164,11 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
             else:
                 add_chat_to_db(YOUR_USER_ID, chat_id, chat_title, chat_type)
         
-        # ===== ОТСЛЕЖИВАНИЕ =====
+        # ===== ОТСЛЕЖИВАНИЕ - ВСЕ СООБЩЕНИЯ =====
         if chat_id in tracked_chats:
             user = update.effective_user
             
+            # Проверяем, ответ на бота
             is_reply_to_bot = False
             if update.message and update.message.reply_to_message:
                 reply_to = update.message.reply_to_message
@@ -1218,9 +1210,10 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
                 else:
                     message_text = "📎 Другое сообщение"
                 
-                # Отправляем уведомление (ВСЕ сообщения, и обычные, и ответы)
+                # Отправляем уведомление с кнопкой ответа
                 await send_tracking_notification(
                     context, chat, user, message_text, 
+                    update.message.message_id,  # Передаем ID сообщения
                     file_id, file_type, is_reply_to_bot
                 )
         
@@ -1238,7 +1231,7 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
                 target_user_id = state['user_id']
                 if is_user_blocked(target_user_id):
                     await update.message.reply_text(
-                        f"🚫 <b>Пользователь заблокирован</b>\n\n"
+                        f"🚫 <b>Пользователь ЗАБЛОКИРОВАН</b>\n\n"
                         f"ID: <code>{target_user_id}</code>\n"
                         "Сначала разблокируйте его в меню",
                         parse_mode='HTML',
@@ -1520,10 +1513,9 @@ def main():
         print("📌 ФУНКЦИИ:")
         print("  ⭐ Закрепление нескольких чатов")
         print("  👁 Отслеживание с пометками (ВСЕ сообщения)")
-        print("  👥 Личный чат с пользователями")
-        print("  📝 Ответ на сообщение с цитатой")
+        print("  📝 Ответ на сообщение с кнопкой под каждым")
         print("  🎨 Отправка стикеров")
-        print("  🚫 Блокировка пользователей (РАБОТАЕТ)")
+        print("  🚫 БЛОКИРОВКА РАБОТАЕТ (проверка в 2-х местах)")
         print("  📤 Отправка любых медиа (без выхода из режима)")
         print("  🔙 Кнопка Назад в каждом режиме")
         print("  🗑 Автоочистка (только незаблокированных)")
