@@ -28,9 +28,6 @@ tracked_chats = []
 fixed_chats = []
 BOT_USERNAME = None
 
-# Состояния для ответов на сообщения
-reply_states = {}
-
 
 # ===== БАЗА ДАННЫХ =====
 def init_db():
@@ -142,6 +139,7 @@ def block_user(user_id):
         cursor.execute('UPDATE users SET is_blocked = 1 WHERE user_id = ?', (user_id,))
         conn.commit()
         conn.close()
+        logger.info(f"Пользователь {user_id} заблокирован")
         return True
     except Exception as e:
         logger.error(f"Ошибка блокировки пользователя: {e}")
@@ -154,6 +152,7 @@ def unblock_user(user_id):
         cursor.execute('UPDATE users SET is_blocked = 0 WHERE user_id = ?', (user_id,))
         conn.commit()
         conn.close()
+        logger.info(f"Пользователь {user_id} разблокирован")
         return True
     except Exception as e:
         logger.error(f"Ошибка разблокировки пользователя: {e}")
@@ -525,14 +524,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("❌ Пользователь не найден", reply_markup=get_main_keyboard())
             return
         
-        user_id, username, first_name, last_name, is_blocked, last_time = user
+        user_id, username, first_name, last_name, is_blocked = user
         
         text = f"👤 <b>Информация о пользователе</b>\n\n"
         text += f"🆔 ID: <code>{user_id}</code>\n"
         text += f"📛 Имя: {first_name or 'Нет'}\n"
         text += f"🔗 Юзернейм: @{username or 'Нет'}\n"
-        text += f"📊 Статус: {'🚫 Заблокирован' if is_blocked else '✅ Активен'}\n"
-        text += f"🕐 Последнее сообщение: {last_time[:16] if last_time else 'Нет'}"
+        text += f"📊 Статус: {'🚫 Заблокирован' if is_blocked else '✅ Активен'}"
         
         await query.edit_message_text(
             text,
@@ -548,10 +546,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode='HTML',
                 reply_markup=get_main_keyboard()
             )
-            await context.bot.send_message(
-                chat_id=YOUR_USER_ID,
-                text=f"🚫 Заблокирован пользователь: {user_id}"
-            )
         else:
             await query.edit_message_text("❌ Ошибка блокировки", reply_markup=get_main_keyboard())
     
@@ -563,10 +557,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode='HTML',
                 reply_markup=get_main_keyboard()
             )
-            await context.bot.send_message(
-                chat_id=YOUR_USER_ID,
-                text=f"✅ Разблокирован пользователь: {user_id}"
-            )
         else:
             await query.edit_message_text("❌ Ошибка разблокировки", reply_markup=get_main_keyboard())
     
@@ -577,8 +567,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"✏️ <b>Ответ пользователю</b>\n\n"
             f"ID: <code>{user_id}</code>\n\n"
             "Отправьте текст, фото, видео, документ или стикер.\n"
-            "Бот автоматически определит тип.",
-            parse_mode='HTML'
+            "Бот автоматически определит тип.\n\n"
+            "Нажмите 🔙 Назад чтобы выйти",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]])
         )
     
     elif data == "tracking_menu":
@@ -612,9 +604,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = int(data.split("_")[2])
         user_states[user_id] = {'action': 'send_message', 'chat_id': chat_id}
         await query.edit_message_text(
-            f"✏️ <b>Введите текст</b>\n\n"
-            f"Чат: <code>{chat_id}</code>",
-            parse_mode='HTML'
+            f"✏️ <b>Режим отправки текста</b>\n\n"
+            f"Чат: <code>{chat_id}</code>\n\n"
+            "Теперь можете писать текст.\n"
+            "Сообщения будут уходить в этот чат.\n\n"
+            "Нажмите 🔙 Назад чтобы выйти",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]])
         )
     
     elif data.startswith("quick_media_"):
@@ -630,9 +626,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         emoji = {"photo": "📷", "video": "🎥", "document": "📄", "sticker": "🎨"}.get(media_type, "📎")
         await query.edit_message_text(
-            f"{emoji} <b>Отправьте {media_type}</b>\n\n"
-            f"Чат: <code>{chat_id}</code>",
-            parse_mode='HTML'
+            f"{emoji} <b>Режим отправки {media_type}</b>\n\n"
+            f"Чат: <code>{chat_id}</code>\n\n"
+            f"Отправьте {media_type}.\n\n"
+            "Нажмите 🔙 Назад чтобы выйти",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]])
         )
     
     elif data == "list_chats":
@@ -699,11 +698,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = int(data.split("_")[2])
         user_states[user_id] = {'action': 'send_any', 'chat_id': chat_id}
         await query.edit_message_text(
-            f"📤 <b>Отправьте что угодно</b>\n\n"
+            f"📤 <b>Режим отправки</b>\n\n"
             f"Чат: <code>{chat_id}</code>\n\n"
-            "Можно отправить: текст, фото, видео, документ, стикер\n"
-            "Бот сам определит тип",
-            parse_mode='HTML'
+            "Теперь можете отправлять ЛЮБЫЕ сообщения:\n"
+            "✅ Текст\n✅ Фото\n✅ Видео\n✅ Документ\n✅ Стикер\n\n"
+            "Бот сам определит тип.\n\n"
+            "Нажмите 🔙 Назад чтобы выйти",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]])
         )
     
     elif data.startswith("reply_in_chat_"):
@@ -744,14 +746,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = int(parts[2])
         message_id = int(parts[3])
         
-        reply_states[YOUR_USER_ID] = {'chat_id': chat_id, 'message_id': message_id}
+        user_states[YOUR_USER_ID] = {'action': 'reply_in_chat', 'chat_id': chat_id, 'message_id': message_id}
         
         await query.edit_message_text(
             f"✏️ <b>Напишите ответ</b>\n\n"
             f"Чат: <code>{chat_id}</code>\n"
             f"Сообщение ID: <code>{message_id}</code>\n\n"
-            "Отправьте текст, фото, видео, документ или стикер",
-            parse_mode='HTML'
+            "Отправьте текст, фото, видео, документ или стикер\n\n"
+            "Нажмите 🔙 Назад чтобы выйти",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]])
         )
     
     elif data.startswith("last_messages_"):
@@ -960,10 +964,11 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
         user = update.effective_user
         add_user_to_db(user_id, user.username, user.first_name, user.last_name)
         
+        # ПРОВЕРКА НА БЛОКИРОВКУ
         user_data = get_user(user_id)
         if user_data and user_data[4] == 1:
-            logger.info(f"Заблокированный пользователь {user_id} написал боту")
-            return
+            logger.info(f"Заблокированный пользователь {user_id} написал боту - ИГНОРИРУЕМ")
+            return  # МОЛЧА ИГНОРИРУЕМ
         
         message_text = "Медиа"
         file_id = None
@@ -1017,6 +1022,20 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
                         [InlineKeyboardButton("🚫 Заблокировать", callback_data=f"block_user_{user_id}")]
                     ])
                 )
+            elif file_type == "sticker":
+                await context.bot.send_sticker(
+                    chat_id=YOUR_USER_ID,
+                    sticker=file_id
+                )
+                await context.bot.send_message(
+                    chat_id=YOUR_USER_ID,
+                    text=notification,
+                    parse_mode='HTML',
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("📤 Ответить", callback_data=f"reply_user_{user_id}")],
+                        [InlineKeyboardButton("🚫 Заблокировать", callback_data=f"block_user_{user_id}")]
+                    ])
+                )
             elif file_type in ["video", "document", "audio", "voice"]:
                 if file_type == "video":
                     await context.bot.send_video(
@@ -1062,20 +1081,6 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
                             [InlineKeyboardButton("🚫 Заблокировать", callback_data=f"block_user_{user_id}")]
                         ])
                     )
-            elif file_type == "sticker":
-                await context.bot.send_sticker(
-                    chat_id=YOUR_USER_ID,
-                    sticker=file_id
-                )
-                await context.bot.send_message(
-                    chat_id=YOUR_USER_ID,
-                    text=notification,
-                    parse_mode='HTML',
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("📤 Ответить", callback_data=f"reply_user_{user_id}")],
-                        [InlineKeyboardButton("🚫 Заблокировать", callback_data=f"block_user_{user_id}")]
-                    ])
-                )
             else:
                 await context.bot.send_message(
                     chat_id=YOUR_USER_ID,
@@ -1103,6 +1108,7 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
                     parse_mode='HTML'
                 )
         
+        # ===== ОТСЛЕЖИВАНИЕ =====
         if chat_id in tracked_chats:
             user = update.effective_user
             
@@ -1156,88 +1162,117 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     # ===== ПРИВАТНЫЙ ЧАТ С ВЛАДЕЛЬЦЕМ =====
     if chat_type == "private" and user_id == YOUR_USER_ID:
+        # Если есть состояние - обрабатываем
         if user_id in user_states:
             state = user_states[user_id]
             action = state['action']
             
+            # Отправка текста
             if action == 'send_message' and update.message and update.message.text:
                 chat_id = state['chat_id']
                 try:
                     await context.bot.send_message(chat_id=chat_id, text=update.message.text)
-                    await update.message.reply_text(f"✅ Отправлено", reply_markup=get_main_keyboard())
-                    del user_states[user_id]
+                    await update.message.reply_text(f"✅ Отправлено")
+                    # НЕ удаляем состояние, чтобы можно было продолжать писать
                 except Exception as e:
                     await update.message.reply_text(f"❌ Ошибка: {e}")
                 return
             
-            elif action == 'send_any' or action == 'send_media':
+            # Отправка любого медиа
+            elif action == 'send_any' and update.message:
                 chat_id = state['chat_id']
-                media_type = state.get('media_type', 'any')
-                
                 try:
                     if update.message.text:
                         await context.bot.send_message(chat_id=chat_id, text=update.message.text)
-                        await update.message.reply_text(f"✅ Текст отправлен", reply_markup=get_main_keyboard())
-                        del user_states[user_id]
                     elif update.message.photo:
                         await context.bot.send_photo(
                             chat_id=chat_id,
                             photo=update.message.photo[-1].file_id,
                             caption=update.message.caption
                         )
-                        await update.message.reply_text(f"✅ Фото отправлено", reply_markup=get_main_keyboard())
-                        del user_states[user_id]
                     elif update.message.video:
                         await context.bot.send_video(
                             chat_id=chat_id,
                             video=update.message.video.file_id,
                             caption=update.message.caption
                         )
-                        await update.message.reply_text(f"✅ Видео отправлено", reply_markup=get_main_keyboard())
-                        del user_states[user_id]
                     elif update.message.document:
                         await context.bot.send_document(
                             chat_id=chat_id,
                             document=update.message.document.file_id,
                             caption=update.message.caption
                         )
-                        await update.message.reply_text(f"✅ Документ отправлен", reply_markup=get_main_keyboard())
-                        del user_states[user_id]
                     elif update.message.sticker:
                         await context.bot.send_sticker(
                             chat_id=chat_id,
                             sticker=update.message.sticker.file_id
                         )
-                        await update.message.reply_text(f"✅ Стикер отправлен", reply_markup=get_main_keyboard())
-                        del user_states[user_id]
                     elif update.message.audio:
                         await context.bot.send_audio(
                             chat_id=chat_id,
                             audio=update.message.audio.file_id,
                             caption=update.message.caption
                         )
-                        await update.message.reply_text(f"✅ Аудио отправлено", reply_markup=get_main_keyboard())
-                        del user_states[user_id]
                     elif update.message.voice:
                         await context.bot.send_voice(
                             chat_id=chat_id,
                             voice=update.message.voice.file_id,
                             caption=update.message.caption
                         )
-                        await update.message.reply_text(f"✅ Голосовое отправлено", reply_markup=get_main_keyboard())
-                        del user_states[user_id]
                     else:
-                        await update.message.reply_text(
-                            f"❌ Неподдерживаемый тип",
-                            reply_markup=get_main_keyboard()
-                        )
+                        await update.message.reply_text("❌ Неподдерживаемый тип")
+                        return
+                    
+                    await update.message.reply_text("✅ Отправлено")
+                    # НЕ удаляем состояние
                 except Exception as e:
                     await update.message.reply_text(f"❌ Ошибка: {e}")
                 return
             
-            elif action == 'reply_to_user':
-                target_user_id = state['user_id']
+            # Отправка медиа (конкретный тип)
+            elif action == 'send_media' and update.message:
+                chat_id = state['chat_id']
+                media_type = state['media_type']
                 
+                try:
+                    if media_type == "photo" and update.message.photo:
+                        await context.bot.send_photo(
+                            chat_id=chat_id,
+                            photo=update.message.photo[-1].file_id,
+                            caption=update.message.caption
+                        )
+                        await update.message.reply_text("✅ Фото отправлено")
+                    elif media_type == "video" and update.message.video:
+                        await context.bot.send_video(
+                            chat_id=chat_id,
+                            video=update.message.video.file_id,
+                            caption=update.message.caption
+                        )
+                        await update.message.reply_text("✅ Видео отправлено")
+                    elif media_type == "document" and update.message.document:
+                        await context.bot.send_document(
+                            chat_id=chat_id,
+                            document=update.message.document.file_id,
+                            caption=update.message.caption
+                        )
+                        await update.message.reply_text("✅ Документ отправлен")
+                    elif media_type == "sticker" and update.message.sticker:
+                        await context.bot.send_sticker(
+                            chat_id=chat_id,
+                            sticker=update.message.sticker.file_id
+                        )
+                        await update.message.reply_text("✅ Стикер отправлен")
+                    else:
+                        await update.message.reply_text(f"❌ Отправьте {media_type}")
+                        return
+                    # НЕ удаляем состояние
+                except Exception as e:
+                    await update.message.reply_text(f"❌ Ошибка: {e}")
+                return
+            
+            # Ответ пользователю
+            elif action == 'reply_to_user' and update.message:
+                target_user_id = state['user_id']
                 try:
                     if update.message.text:
                         await context.bot.send_message(chat_id=target_user_id, text=update.message.text)
@@ -1280,12 +1315,62 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
                         await update.message.reply_text("❌ Неподдерживаемый тип")
                         return
                     
-                    await update.message.reply_text(f"✅ Отправлено пользователю", reply_markup=get_main_keyboard())
-                    del user_states[user_id]
+                    await update.message.reply_text("✅ Отправлено пользователю")
+                    # НЕ удаляем состояние
+                except Exception as e:
+                    await update.message.reply_text(f"❌ Ошибка: {e}")
+                return
+            
+            # Ответ на сообщение в чате
+            elif action == 'reply_in_chat' and update.message:
+                chat_id = state['chat_id']
+                message_id = state['message_id']
+                
+                try:
+                    if update.message.text:
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=update.message.text,
+                            reply_to_message_id=message_id
+                        )
+                    elif update.message.photo:
+                        await context.bot.send_photo(
+                            chat_id=chat_id,
+                            photo=update.message.photo[-1].file_id,
+                            caption=update.message.caption,
+                            reply_to_message_id=message_id
+                        )
+                    elif update.message.video:
+                        await context.bot.send_video(
+                            chat_id=chat_id,
+                            video=update.message.video.file_id,
+                            caption=update.message.caption,
+                            reply_to_message_id=message_id
+                        )
+                    elif update.message.document:
+                        await context.bot.send_document(
+                            chat_id=chat_id,
+                            document=update.message.document.file_id,
+                            caption=update.message.caption,
+                            reply_to_message_id=message_id
+                        )
+                    elif update.message.sticker:
+                        await context.bot.send_sticker(
+                            chat_id=chat_id,
+                            sticker=update.message.sticker.file_id,
+                            reply_to_message_id=message_id
+                        )
+                    else:
+                        await update.message.reply_text("❌ Неподдерживаемый тип")
+                        return
+                    
+                    await update.message.reply_text("✅ Ответ отправлен")
+                    # НЕ удаляем состояние
                 except Exception as e:
                     await update.message.reply_text(f"❌ Ошибка: {e}")
                 return
         
+        # Если нет состояния - показываем меню
         if not update.message or not update.message.text or not update.message.text.startswith('/'):
             await update.message.reply_text(
                 "👋 <b>Главное меню</b>\n\nВыберите действие:",
@@ -1366,8 +1451,8 @@ def main():
         print("  👥 Личный чат с пользователями")
         print("  📝 Ответ на сообщение с цитатой")
         print("  🎨 Отправка стикеров")
-        print("  🚫 Блокировка пользователей")
-        print("  📤 Отправка любых медиа")
+        print("  🚫 Блокировка пользователей (РАБОТАЕТ)")
+        print("  📤 Отправка любых медиа (без выхода из режима)")
         print("  🗑 Автоочистка (только незаблокированных)")
         print("=" * 50)
         print("🔄 Ожидание сообщений...")
